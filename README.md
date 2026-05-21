@@ -16,5 +16,7 @@ Current timing assumptions:
 - CDS2: high from 30 us to 40 us by default, editable in the side panel
 - Display range: 0 us to 60 us
 - PL_DCDC_CLK1 and 3.3V_DIG: 175 MHz divided clock, divider 84 by default, 50% duty
+- PL_DCDC_CLK1: delay is editable in ns from the side panel
+- 3.3V_DIG: nearest rising/falling edge distance from CDS1/CDS2 falling edges is shown in ns
 - Extra empty rows are reserved for up to five additional 3.3V_DIG-style signals
 - Fine delay notes: 20 ns and 250 ns
