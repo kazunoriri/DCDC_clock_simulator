@@ -66,7 +66,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("DCDC Clock Timing")
-        self.resize(1080, 930)
+        self.resize(760, 650)
 
         pg.setConfigOptions(antialias=True, background="k", foreground="#b8c3d1")
 
@@ -74,7 +74,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.setCentralWidget(self.plot)
         self.plot.setBackground("#000000")
         self.plot.showGrid(x=True, y=True, alpha=0.34)
-        self.plot.setLabel("bottom", "time", units="us", color="#b8c3d1")
+        self.plot.setLabel("bottom", "time [us]", color="#b8c3d1")
         self.plot.setMouseEnabled(x=True, y=False)
         self.plot.setMenuEnabled(False)
         self.plot.getPlotItem().getViewBox().setBorder(pg.mkPen("#606060", width=1))
@@ -97,7 +97,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
     def draw(self) -> None:
         signals = [
-            PulseSignal("SYNC", ((0.0, 60.0),)),
+            PulseSignal("SYNC", ((0.0, 100.0 * US_PER_NS),)),
             PulseSignal("CDS1", ((1.0, 15.0),)),
             PulseSignal("CDS2", ((30.0, 40.0),)),
         ]
@@ -150,7 +150,6 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.plot.plot(dig_x, dig_y, pen=waveform_pen)
 
         self.add_time_markers([0, 1, 15, 30, 40, 60], marker_pen)
-        self.add_notes(baselines)
 
         self.plot.setXRange(self.x_min_us, self.x_max_us, padding=0)
         self.plot.setYRange(
@@ -172,23 +171,6 @@ class TimingDiagram(QtWidgets.QMainWindow):
             text.setFont(QtGui.QFont("Meiryo", 9))
             text.setPos(value_us, -0.66)
             self.plot.addItem(text)
-
-    def add_notes(self, baselines: dict[str, float]) -> None:
-        frequency_mhz = 1.0 / self.clock_period_us
-        self.add_text(
-            f"DUTY 50% / {frequency_mhz:g} MHz",
-            22.0,
-            baselines["3.3V_DIG"] + 0.52,
-        )
-        self.add_text("20 ns delay", 0.02, baselines["3.3V_DIG"] - 0.52)
-        self.add_text("250 ns delay", 0.25, baselines["3.3V_DIG"] - 0.78)
-        self.add_text("continuous pulses", 9.0, baselines["PL_DCDC_CLK1"] + 0.52)
-
-    def add_text(self, text: str, x_us: float, y: float) -> None:
-        item = pg.TextItem(text, color="#b8c3d1", anchor=(0, 0.5))
-        item.setFont(QtGui.QFont("Meiryo", 9))
-        item.setPos(x_us, y)
-        self.plot.addItem(item)
 
 
 def main() -> None:
