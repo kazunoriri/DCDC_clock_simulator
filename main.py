@@ -70,8 +70,17 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
         pg.setConfigOptions(antialias=True, background="k", foreground="#b8c3d1")
 
+        central = QtWidgets.QWidget()
+        central.setStyleSheet("background: #000000; color: #b8c3d1;")
+        layout = QtWidgets.QHBoxLayout(central)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
+
         self.plot = pg.PlotWidget()
-        self.setCentralWidget(self.plot)
+        layout.addWidget(self.plot, stretch=1)
+        layout.addWidget(self.create_control_panel())
+        self.setCentralWidget(central)
+
         self.plot.setBackground("#000000")
         self.plot.showGrid(x=True, y=True, alpha=0.34)
         self.plot.setLabel("bottom", "time [us]", color="#b8c3d1")
@@ -92,13 +101,59 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.row_gap = 1.35
         self.amplitude = 0.74
         self.clock_period_us = 1.0
+        self.cds1_start_us = 1.0
+        self.cds1_end_us = 15.0
 
         self.draw()
 
+    def create_control_panel(self) -> QtWidgets.QWidget:
+        panel = QtWidgets.QWidget()
+        panel.setFixedWidth(118)
+        panel.setStyleSheet(
+            """
+            QLabel {
+                color: #b8c3d1;
+                font-family: Meiryo;
+                font-size: 10pt;
+            }
+            QLineEdit {
+                background: #111111;
+                border: 1px solid #606060;
+                color: #ffff00;
+                padding: 4px 6px;
+                selection-background-color: #1f6feb;
+            }
+            """
+        )
+
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 78, 0, 0)
+        layout.setSpacing(6)
+
+        title = QtWidgets.QLabel("CDS1 [us]")
+        self.cds1_start_edit = self.create_time_edit("1")
+        self.cds1_end_edit = self.create_time_edit("15")
+
+        layout.addWidget(title)
+        layout.addWidget(self.cds1_start_edit)
+        layout.addWidget(self.cds1_end_edit)
+        layout.addStretch()
+        return panel
+
+    def create_time_edit(self, text: str) -> QtWidgets.QLineEdit:
+        edit = QtWidgets.QLineEdit(text)
+        validator = QtGui.QDoubleValidator(0.0, 60.0, 6, edit)
+        validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
+        edit.setValidator(validator)
+        edit.editingFinished.connect(self.apply_cds1_inputs)
+        return edit
+
     def draw(self) -> None:
+        self.plot.clear()
+
         signals = [
             PulseSignal("SYNC", ((0.0, 100.0 * US_PER_NS),)),
-            PulseSignal("CDS1", ((1.0, 15.0),)),
+            PulseSignal("CDS1", ((self.cds1_start_us, self.cds1_end_us),)),
             PulseSignal("CDS2", ((30.0, 40.0),)),
         ]
 
@@ -149,7 +204,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         )
         self.plot.plot(dig_x, dig_y, pen=waveform_pen)
 
-        self.add_time_markers([0, 1, 15, 30, 40, 60], marker_pen)
+        self.add_time_markers([0, self.cds1_end_us, 40, 60], marker_pen)
 
         self.plot.setXRange(self.x_min_us, self.x_max_us, padding=0)
         self.plot.setYRange(
@@ -171,6 +226,26 @@ class TimingDiagram(QtWidgets.QMainWindow):
             text.setFont(QtGui.QFont("Meiryo", 9))
             text.setPos(value_us, -0.66)
             self.plot.addItem(text)
+
+    def apply_cds1_inputs(self) -> None:
+        start_us = self.parse_time_edit(self.cds1_start_edit, self.cds1_start_us)
+        end_us = self.parse_time_edit(self.cds1_end_edit, self.cds1_end_us)
+        if start_us >= end_us:
+            self.cds1_start_edit.setText(f"{self.cds1_start_us:g}")
+            self.cds1_end_edit.setText(f"{self.cds1_end_us:g}")
+            return
+
+        self.cds1_start_us = start_us
+        self.cds1_end_us = end_us
+        self.draw()
+
+    def parse_time_edit(self, edit: QtWidgets.QLineEdit, fallback: float) -> float:
+        text = edit.text().strip()
+        try:
+            return float(text)
+        except ValueError:
+            edit.setText(f"{fallback:g}")
+            return fallback
 
 
 def main() -> None:
