@@ -68,6 +68,17 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.setWindowTitle("DCDC Clock Timing")
         self.resize(760, 650)
 
+        self.x_min_us = -2.0
+        self.x_max_us = 62.0
+        self.row_gap = 1.35
+        self.amplitude = 0.74
+        self.source_clock_mhz = 175.0
+        self.clock_divider = 84
+        self.cds1_start_us = 1.0
+        self.cds1_end_us = 15.0
+        self.cds2_start_us = 30.0
+        self.cds2_end_us = 40.0
+
         pg.setConfigOptions(antialias=True, background="k", foreground="#b8c3d1")
 
         central = QtWidgets.QWidget()
@@ -96,14 +107,6 @@ class TimingDiagram(QtWidgets.QMainWindow):
             axis.setStyle(tickFont=QtGui.QFont("Meiryo", 9), autoExpandTextSpace=True)
         bottom_axis.setTickSpacing(major=10, minor=1)
 
-        self.x_min_us = -2.0
-        self.x_max_us = 62.0
-        self.row_gap = 1.35
-        self.amplitude = 0.74
-        self.clock_period_us = 1.0
-        self.cds1_start_us = 1.0
-        self.cds1_end_us = 15.0
-
         self.draw()
 
     def create_control_panel(self) -> QtWidgets.QWidget:
@@ -123,20 +126,41 @@ class TimingDiagram(QtWidgets.QMainWindow):
                 padding: 4px 6px;
                 selection-background-color: #1f6feb;
             }
+            QLabel#result {
+                color: #ffff00;
+            }
             """
         )
 
         layout = QtWidgets.QVBoxLayout(panel)
-        layout.setContentsMargins(0, 78, 0, 0)
+        layout.setContentsMargins(0, 48, 0, 0)
         layout.setSpacing(6)
 
         title = QtWidgets.QLabel("CDS1 [us]")
         self.cds1_start_edit = self.create_time_edit("1")
         self.cds1_end_edit = self.create_time_edit("15")
+        cds2_title = QtWidgets.QLabel("CDS2 [us]")
+        self.cds2_start_edit = self.create_time_edit("30")
+        self.cds2_end_edit = self.create_time_edit("40")
+        divider_title = QtWidgets.QLabel("DIV")
+        self.divider_edit = QtWidgets.QLineEdit(str(self.clock_divider))
+        self.divider_edit.setValidator(QtGui.QIntValidator(1, 1000000, self.divider_edit))
+        self.divider_edit.editingFinished.connect(self.apply_inputs)
+        self.frequency_label = QtWidgets.QLabel()
+        self.frequency_label.setObjectName("result")
+        self.update_frequency_label()
 
         layout.addWidget(title)
         layout.addWidget(self.cds1_start_edit)
         layout.addWidget(self.cds1_end_edit)
+        layout.addSpacing(14)
+        layout.addWidget(cds2_title)
+        layout.addWidget(self.cds2_start_edit)
+        layout.addWidget(self.cds2_end_edit)
+        layout.addSpacing(14)
+        layout.addWidget(divider_title)
+        layout.addWidget(self.divider_edit)
+        layout.addWidget(self.frequency_label)
         layout.addStretch()
         return panel
 
@@ -145,27 +169,27 @@ class TimingDiagram(QtWidgets.QMainWindow):
         validator = QtGui.QDoubleValidator(0.0, 60.0, 6, edit)
         validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
         edit.setValidator(validator)
-        edit.editingFinished.connect(self.apply_cds1_inputs)
+        edit.editingFinished.connect(self.apply_inputs)
         return edit
 
     def draw(self) -> None:
         self.plot.clear()
 
         signals = [
-            PulseSignal("SYNC", ((0.0, 100.0 * US_PER_NS),)),
             PulseSignal("CDS1", ((self.cds1_start_us, self.cds1_end_us),)),
-            PulseSignal("CDS2", ((30.0, 40.0),)),
+            PulseSignal("CDS2", ((self.cds2_start_us, self.cds2_end_us),)),
         ]
 
         waveform_pen = pg.mkPen("#ffff00", width=1)
         marker_pen = pg.mkPen("#8a8a8a", width=1, style=QtCore.Qt.PenStyle.DashLine)
 
-        row_names = ["SYNC", "CDS1", "CDS2", "PL_DCDC_CLK1", "3.3V_DIG"]
+        row_names = ["CDS1", "CDS2", "PL_DCDC_CLK1", "3.3V_DIG"]
         baselines = {
             name: (len(row_names) - index - 1) * self.row_gap
             for index, name in enumerate(row_names)
         }
         half_amp = self.amplitude * 0.5
+        clock_period_us = self.clock_divider / self.source_clock_mhz
 
         self.plot.getAxis("left").setTicks(
             [[(baselines[name], name) for name in row_names]]
@@ -186,7 +210,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         pl_x, pl_y = clock_steps(
             start_us=0.0,
             end_us=60.0,
-            period_us=self.clock_period_us,
+            period_us=clock_period_us,
             duty=0.5,
             low=pl_base - half_amp,
             high=pl_base + half_amp,
@@ -197,14 +221,14 @@ class TimingDiagram(QtWidgets.QMainWindow):
         dig_x, dig_y = clock_steps(
             start_us=20.0 * US_PER_NS,
             end_us=60.0,
-            period_us=self.clock_period_us,
+            period_us=clock_period_us,
             duty=0.5,
             low=dig_base - half_amp,
             high=dig_base + half_amp,
         )
         self.plot.plot(dig_x, dig_y, pen=waveform_pen)
 
-        self.add_time_markers([0, self.cds1_end_us, 40, 60], marker_pen)
+        self.add_time_markers([0, self.cds1_end_us, self.cds2_end_us, 60], marker_pen)
 
         self.plot.setXRange(self.x_min_us, self.x_max_us, padding=0)
         self.plot.setYRange(
@@ -227,7 +251,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
             text.setPos(value_us, -0.66)
             self.plot.addItem(text)
 
-    def apply_cds1_inputs(self) -> None:
+    def apply_inputs(self) -> None:
         start_us = self.parse_time_edit(self.cds1_start_edit, self.cds1_start_us)
         end_us = self.parse_time_edit(self.cds1_end_edit, self.cds1_end_us)
         if start_us >= end_us:
@@ -235,8 +259,23 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.cds1_end_edit.setText(f"{self.cds1_end_us:g}")
             return
 
+        cds2_start_us = self.parse_time_edit(self.cds2_start_edit, self.cds2_start_us)
+        cds2_end_us = self.parse_time_edit(self.cds2_end_edit, self.cds2_end_us)
+        if cds2_start_us >= cds2_end_us:
+            self.cds2_start_edit.setText(f"{self.cds2_start_us:g}")
+            self.cds2_end_edit.setText(f"{self.cds2_end_us:g}")
+            return
+
+        divider = self.parse_divider_edit()
+        if divider is None:
+            return
+
         self.cds1_start_us = start_us
         self.cds1_end_us = end_us
+        self.cds2_start_us = cds2_start_us
+        self.cds2_end_us = cds2_end_us
+        self.clock_divider = divider
+        self.update_frequency_label()
         self.draw()
 
     def parse_time_edit(self, edit: QtWidgets.QLineEdit, fallback: float) -> float:
@@ -246,6 +285,24 @@ class TimingDiagram(QtWidgets.QMainWindow):
         except ValueError:
             edit.setText(f"{fallback:g}")
             return fallback
+
+    def parse_divider_edit(self) -> int | None:
+        text = self.divider_edit.text().strip()
+        try:
+            divider = int(text)
+        except ValueError:
+            self.divider_edit.setText(str(self.clock_divider))
+            return None
+
+        if divider < 1:
+            self.divider_edit.setText(str(self.clock_divider))
+            return None
+
+        return divider
+
+    def update_frequency_label(self) -> None:
+        frequency_mhz = self.source_clock_mhz / self.clock_divider
+        self.frequency_label.setText(f"{frequency_mhz:.6g} MHz")
 
 
 def main() -> None:
