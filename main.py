@@ -130,61 +130,95 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
     def create_control_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
-        panel.setFixedWidth(118)
+        panel.setFixedWidth(150)
         panel.setStyleSheet(
             """
             QLabel {
                 color: #b8c3d1;
                 font-family: Meiryo;
-                font-size: 10pt;
+                font-size: 9pt;
             }
             QLineEdit {
-                background: #111111;
+                background: #555555;
                 border: 1px solid #606060;
-                color: #ffff00;
-                padding: 4px 6px;
+                color: #f1f5f9;
+                font-family: Meiryo;
+                font-size: 9pt;
+                padding: 2px 6px;
                 selection-background-color: #1f6feb;
             }
             QLabel#result {
-                color: #ffff00;
+                color: #b8c3d1;
             }
             """
         )
 
-        layout = QtWidgets.QVBoxLayout(panel)
-        layout.setContentsMargins(0, 48, 0, 0)
-        layout.setSpacing(6)
+        layout = QtWidgets.QGridLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 34)
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(0)
+        for row in range(9):
+            layout.setRowStretch(row, 1)
 
-        title = QtWidgets.QLabel("CDS1 [us]")
         self.cds1_start_edit = self.create_time_edit("1")
         self.cds1_end_edit = self.create_time_edit("15")
-        cds2_title = QtWidgets.QLabel("CDS2 [us]")
         self.cds2_start_edit = self.create_time_edit("30")
         self.cds2_end_edit = self.create_time_edit("40")
-        divider_title = QtWidgets.QLabel("DIV")
         self.divider_edit = QtWidgets.QLineEdit(str(self.clock_divider))
+        self.divider_edit.setFixedWidth(64)
+        self.divider_edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.divider_edit.setValidator(QtGui.QIntValidator(1, 1000000, self.divider_edit))
         self.divider_edit.editingFinished.connect(self.apply_inputs)
         self.frequency_label = QtWidgets.QLabel()
         self.frequency_label.setObjectName("result")
         self.update_frequency_label()
 
-        layout.addWidget(title)
-        layout.addWidget(self.cds1_start_edit)
-        layout.addWidget(self.cds1_end_edit)
-        layout.addSpacing(14)
-        layout.addWidget(cds2_title)
-        layout.addWidget(self.cds2_start_edit)
-        layout.addWidget(self.cds2_end_edit)
-        layout.addSpacing(14)
-        layout.addWidget(divider_title)
-        layout.addWidget(self.divider_edit)
-        layout.addWidget(self.frequency_label)
-        layout.addStretch()
+        layout.addWidget(self.create_pulse_editor(self.cds1_start_edit, self.cds1_end_edit), 0, 0)
+        layout.addWidget(self.create_pulse_editor(self.cds2_start_edit, self.cds2_end_edit), 1, 0)
+        layout.addWidget(self.create_clock_editor(), 2, 0)
         return panel
+
+    def create_pulse_editor(
+        self,
+        start_edit: QtWidgets.QLineEdit,
+        end_edit: QtWidgets.QLineEdit,
+    ) -> QtWidgets.QWidget:
+        editor = QtWidgets.QWidget()
+        layout = QtWidgets.QGridLayout(editor)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(4)
+
+        up_label = QtWidgets.QLabel("↑")
+        down_label = QtWidgets.QLabel("↓")
+        for label in (up_label, down_label):
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(up_label, 0, 0)
+        layout.addWidget(start_edit, 0, 1)
+        layout.addWidget(down_label, 1, 0)
+        layout.addWidget(end_edit, 1, 1)
+        return editor
+
+    def create_clock_editor(self) -> QtWidgets.QWidget:
+        editor = QtWidgets.QWidget()
+        layout = QtWidgets.QGridLayout(editor)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(8)
+
+        div_label = QtWidgets.QLabel("div")
+        freq_label = QtWidgets.QLabel("freq")
+        layout.addWidget(div_label, 0, 0)
+        layout.addWidget(self.divider_edit, 0, 1)
+        layout.addWidget(freq_label, 1, 0)
+        layout.addWidget(self.frequency_label, 1, 1)
+        return editor
 
     def create_time_edit(self, text: str) -> QtWidgets.QLineEdit:
         edit = QtWidgets.QLineEdit(text)
+        edit.setFixedWidth(64)
+        edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         validator = QtGui.QDoubleValidator(0.0, 60.0, 6, edit)
         validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
         edit.setValidator(validator)
@@ -331,7 +365,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
     def update_frequency_label(self) -> None:
         frequency_mhz = self.source_clock_mhz / self.clock_divider
-        self.frequency_label.setText(f"{frequency_mhz:.6g} MHz")
+        self.frequency_label.setText(f"{frequency_mhz:.2f} MHz")
 
 
 def main() -> None:
