@@ -16,6 +16,26 @@ class PulseSignal:
     pulses_us: tuple[tuple[float, float], ...]
 
 
+class TimeAxisItem(pg.AxisItem):
+    def tickStrings(self, values, scale, spacing):  # noqa: N802
+        if spacing >= 1:
+            digits = 0
+        elif spacing >= 0.1:
+            digits = 1
+        elif spacing >= 0.01:
+            digits = 2
+        elif spacing >= 0.001:
+            digits = 3
+        else:
+            digits = 6
+
+        labels = []
+        for value in values:
+            text = f"{value * scale:.{digits}f}"
+            labels.append(text.rstrip("0").rstrip(".") if "." in text else text)
+        return labels
+
+
 def pulse_steps(
     pulses_us: tuple[tuple[float, float], ...],
     x_min_us: float,
@@ -70,7 +90,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
         self.x_min_us = -2.0
         self.x_max_us = 62.0
-        self.row_gap = 1.35
+        self.row_gap = 1.05
         self.amplitude = 0.74
         self.source_clock_mhz = 175.0
         self.clock_divider = 84
@@ -87,7 +107,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        self.plot = pg.PlotWidget()
+        self.plot = pg.PlotWidget(axisItems={"bottom": TimeAxisItem(orientation="bottom")})
         layout.addWidget(self.plot, stretch=1)
         layout.addWidget(self.create_control_panel())
         self.setCentralWidget(central)
@@ -105,7 +125,6 @@ class TimingDiagram(QtWidgets.QMainWindow):
             axis.setPen(pg.mkPen("#808080"))
             axis.setTextPen(pg.mkPen("#b8c3d1"))
             axis.setStyle(tickFont=QtGui.QFont("Meiryo", 9), autoExpandTextSpace=True)
-        bottom_axis.setTickSpacing(major=10, minor=1)
 
         self.draw()
 
@@ -183,7 +202,17 @@ class TimingDiagram(QtWidgets.QMainWindow):
         waveform_pen = pg.mkPen("#ffff00", width=1)
         marker_pen = pg.mkPen("#8a8a8a", width=1, style=QtCore.Qt.PenStyle.DashLine)
 
-        row_names = ["CDS1", "CDS2", "PL_DCDC_CLK1", "3.3V_DIG"]
+        row_names = [
+            "CDS1",
+            "CDS2",
+            "PL_DCDC_CLK1",
+            "3.3V_DIG",
+            "3.3V_DIG_2",
+            "3.3V_DIG_3",
+            "3.3V_DIG_4",
+            "3.3V_DIG_5",
+            "3.3V_DIG_6",
+        ]
         baselines = {
             name: (len(row_names) - index - 1) * self.row_gap
             for index, name in enumerate(row_names)
