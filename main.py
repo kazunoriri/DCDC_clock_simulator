@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,17 @@ class PulseSignal:
 
 
 @dataclass(frozen=True)
+class PowerNet:
+    name: str
+    delay_ns: float
+    duty_percent: float
+
+    @property
+    def duty(self) -> float:
+        return self.duty_percent / 100.0
+
+
+@dataclass(frozen=True)
 class TimingConfig:
     pl_dcdc_clk_name: str = "PL_DCDC_CLK1"
     power_net_name_0: str = "3.3V_DIG"
@@ -41,12 +53,18 @@ class TimingConfig:
     power_net_name_3: str = "3.3V_DIG_4"
     power_net_name_4: str = "3.3V_DIG_5"
     power_net_name_5: str = "3.3V_DIG_6"
-    power_net_delay_ns_0: float = 0.0
-    power_net_delay_ns_1: float = 10.0
-    power_net_delay_ns_2: float = 20.0
-    power_net_delay_ns_3: float = 30.0
-    power_net_delay_ns_4: float = 40.0
-    power_net_delay_ns_5: float = 50.0
+    power_net_delay_ns_0: float | None = 0.0
+    power_net_delay_ns_1: float | None = 10.0
+    power_net_delay_ns_2: float | None = 20.0
+    power_net_delay_ns_3: float | None = 30.0
+    power_net_delay_ns_4: float | None = 40.0
+    power_net_delay_ns_5: float | None = 50.0
+    power_net_duty_percent_0: float | None = 35.0
+    power_net_duty_percent_1: float | None = 42.5
+    power_net_duty_percent_2: float | None = 50.0
+    power_net_duty_percent_3: float | None = 57.5
+    power_net_duty_percent_4: float | None = 65.0
+    power_net_duty_percent_5: float | None = 72.5
     gate_period_us: float = 60.0
     cds1_rise_us: float = 1.0
     cds1_fall_us: float = 15.0
@@ -55,7 +73,10 @@ class TimingConfig:
     clock_divider: int = 84
 
 
-def load_timing_config(path: Path = CONFIG_PATH) -> TimingConfig:
+def load_timing_config(path: Path | None = None) -> TimingConfig:
+    if path is None:
+        path = CONFIG_PATH
+
     defaults = TimingConfig()
     if not path.exists():
         return defaults
@@ -65,46 +86,32 @@ def load_timing_config(path: Path = CONFIG_PATH) -> TimingConfig:
     except (OSError, json.JSONDecodeError):
         return defaults
 
+    def parse_str(key: str, default: str) -> str:
+        value = data.get(key, default)
+        return str(value) if value is not None else ""
+
+    def parse_positive_float(key: str) -> float | None:
+        if key not in data:
+            return None
+        try:
+            value = float(data[key])
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) and value >= 0.0 else None
+
+    def parse_duty_percent(key: str) -> float | None:
+        if key not in data:
+            return None
+        try:
+            value = float(data[key])
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) and 0.0 < value <= 100.0 else None
+
     try:
         values = {
-            "pl_dcdc_clk_name": str(
-                data.get("pl_dcdc_clk_name", defaults.pl_dcdc_clk_name)
-            ),
-            "power_net_name_0": str(
-                data.get("power_net_name_0", defaults.power_net_name_0)
-            ),
-            "power_net_name_1": str(
-                data.get("power_net_name_1", defaults.power_net_name_1)
-            ),
-            "power_net_name_2": str(
-                data.get("power_net_name_2", defaults.power_net_name_2)
-            ),
-            "power_net_name_3": str(
-                data.get("power_net_name_3", defaults.power_net_name_3)
-            ),
-            "power_net_name_4": str(
-                data.get("power_net_name_4", defaults.power_net_name_4)
-            ),
-            "power_net_name_5": str(
-                data.get("power_net_name_5", defaults.power_net_name_5)
-            ),
-            "power_net_delay_ns_0": float(
-                data.get("power_net_delay_ns_0", defaults.power_net_delay_ns_0)
-            ),
-            "power_net_delay_ns_1": float(
-                data.get("power_net_delay_ns_1", defaults.power_net_delay_ns_1)
-            ),
-            "power_net_delay_ns_2": float(
-                data.get("power_net_delay_ns_2", defaults.power_net_delay_ns_2)
-            ),
-            "power_net_delay_ns_3": float(
-                data.get("power_net_delay_ns_3", defaults.power_net_delay_ns_3)
-            ),
-            "power_net_delay_ns_4": float(
-                data.get("power_net_delay_ns_4", defaults.power_net_delay_ns_4)
-            ),
-            "power_net_delay_ns_5": float(
-                data.get("power_net_delay_ns_5", defaults.power_net_delay_ns_5)
+            "pl_dcdc_clk_name": parse_str(
+                "pl_dcdc_clk_name", defaults.pl_dcdc_clk_name
             ),
             "gate_period_us": float(data.get("gate_period_us", defaults.gate_period_us)),
             "cds1_rise_us": float(data.get("cds1_rise_us", defaults.cds1_rise_us)),
@@ -113,18 +120,21 @@ def load_timing_config(path: Path = CONFIG_PATH) -> TimingConfig:
             "cds2_fall_us": float(data.get("cds2_fall_us", defaults.cds2_fall_us)),
             "clock_divider": int(data.get("clock_divider", defaults.clock_divider)),
         }
+        for index in range(6):
+            values[f"power_net_name_{index}"] = parse_str(
+                f"power_net_name_{index}", getattr(defaults, f"power_net_name_{index}")
+            )
+            values[f"power_net_delay_ns_{index}"] = parse_positive_float(
+                f"power_net_delay_ns_{index}"
+            )
+            values[f"power_net_duty_percent_{index}"] = parse_duty_percent(
+                f"power_net_duty_percent_{index}"
+            )
     except (TypeError, ValueError):
         return defaults
 
     if not values["pl_dcdc_clk_name"].strip():
         values["pl_dcdc_clk_name"] = defaults.pl_dcdc_clk_name
-    for index in range(6):
-        key = f"power_net_name_{index}"
-        if not values[key].strip():
-            values[key] = getattr(defaults, key)
-        delay_key = f"power_net_delay_ns_{index}"
-        if values[delay_key] < 0.0:
-            values[delay_key] = getattr(defaults, delay_key)
     if values["gate_period_us"] <= 0.0:
         values["gate_period_us"] = defaults.gate_period_us
     if values["cds1_rise_us"] >= values["cds1_fall_us"]:
@@ -236,6 +246,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("DCDC Clock Timing")
         self.resize(1760, 720)
+        self.move(0, 0)
 
         self.x_min_us = -2.0
         self.row_gap = 1.05
@@ -245,7 +256,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.gate_period_us = self.config.gate_period_us
         self.x_max_us = self.gate_period_us + 2.0
         self.pl_dcdc_clk_name = self.config.pl_dcdc_clk_name
-        self.power_net_names = [
+        power_net_names = [
             self.config.power_net_name_0,
             self.config.power_net_name_1,
             self.config.power_net_name_2,
@@ -253,7 +264,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.config.power_net_name_4,
             self.config.power_net_name_5,
         ]
-        self.power_net_delays_ns = [
+        power_net_delays_ns = [
             self.config.power_net_delay_ns_0,
             self.config.power_net_delay_ns_1,
             self.config.power_net_delay_ns_2,
@@ -261,7 +272,26 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.config.power_net_delay_ns_4,
             self.config.power_net_delay_ns_5,
         ]
-        self.power_net_name_0 = self.power_net_names[0]
+        power_net_duty_percents = [
+            self.config.power_net_duty_percent_0,
+            self.config.power_net_duty_percent_1,
+            self.config.power_net_duty_percent_2,
+            self.config.power_net_duty_percent_3,
+            self.config.power_net_duty_percent_4,
+            self.config.power_net_duty_percent_5,
+        ]
+        self.power_nets = [
+            PowerNet(name.strip(), delay_ns, duty_percent)
+            for name, delay_ns, duty_percent in zip(
+                power_net_names,
+                power_net_delays_ns,
+                power_net_duty_percents,
+                strict=True,
+            )
+            if name.strip() and delay_ns is not None and duty_percent is not None
+        ]
+        self.power_net_names = [power_net.name for power_net in self.power_nets]
+        self.power_net_name_0 = self.power_net_names[0] if self.power_net_names else ""
         self.clock_divider = self.config.clock_divider
         self.pl_clk1_delay_ns = 0.0
         self.cds1_start_us = self.config.cds1_rise_us
@@ -597,18 +627,14 @@ class TimingDiagram(QtWidgets.QMainWindow):
             pl_y = [pl_base - half_amp, pl_base - half_amp] + pl_y
         self.plot.plot(pl_x, pl_y, pen=waveform_pen)
 
-        for power_net_name, power_net_delay_ns in zip(
-            self.power_net_names,
-            self.power_net_delays_ns,
-            strict=True,
-        ):
-            dig_base = baselines[power_net_name]
-            dig_start_us = (self.pl_clk1_delay_ns + power_net_delay_ns) * US_PER_NS
+        for power_net in self.power_nets:
+            dig_base = baselines[power_net.name]
+            dig_start_us = (self.pl_clk1_delay_ns + power_net.delay_ns) * US_PER_NS
             dig_x, dig_y = clock_steps(
                 start_us=dig_start_us,
                 end_us=self.gate_period_us,
                 period_us=clock_period_us,
-                duty=0.5,
+                duty=power_net.duty,
                 low=dig_base - half_amp,
                 high=dig_base + half_amp,
             )
@@ -640,12 +666,17 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.margin_plot.getAxis("bottom").setTicks(
             [
                 [
-                    (index, shorten_tick_label(name))
-                    for index, name in enumerate(self.power_net_names)
+                    (index, shorten_tick_label(power_net.name))
+                    for index, power_net in enumerate(self.power_nets)
                 ]
             ]
         )
-        self.margin_plot.setXRange(-0.5, len(self.power_net_names) - 0.5, padding=0)
+        power_net_count = len(self.power_nets)
+        self.margin_plot.setXRange(
+            -0.5,
+            max(power_net_count - 0.5, 0.5),
+            padding=0,
+        )
         self.margin_plot.setYRange(
             -POWER_MARGIN_RANGE_NS,
             POWER_MARGIN_RANGE_NS,
@@ -735,8 +766,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
             ),
         ]
         power_offsets = [
-            (index - (len(self.power_net_names) - 1) * 0.5) * 0.16
-            for index in range(len(self.power_net_names))
+            (index - (len(self.power_nets) - 1) * 0.5) * 0.16
+            for index in range(len(self.power_nets))
         ]
 
         for key, series_offset, symbol, color, brush_color in series:
@@ -748,7 +779,9 @@ class TimingDiagram(QtWidgets.QMainWindow):
                     pl_delay_ns=delay_ns,
                 )
                 for power_index, entry in enumerate(deltas):
-                    x_values.append(delay_ns + series_offset + power_offsets[power_index])
+                    x_values.append(
+                        delay_ns + series_offset + power_offsets[power_index]
+                    )
                     y_values.append(entry[key])
 
             self.delay_sweep_plot.plot(
@@ -770,9 +803,9 @@ class TimingDiagram(QtWidgets.QMainWindow):
             pl_delay_ns = self.pl_clk1_delay_ns
 
         deltas: list[dict[str, float]] = []
-        for power_net_delay_ns in self.power_net_delays_ns:
-            rise_start_us = (pl_delay_ns + power_net_delay_ns) * US_PER_NS
-            fall_start_us = rise_start_us + clock_period_us * 0.5
+        for power_net in self.power_nets:
+            rise_start_us = (pl_delay_ns + power_net.delay_ns) * US_PER_NS
+            fall_start_us = rise_start_us + clock_period_us * power_net.duty
             deltas.append(
                 {
                     "cds1_rise": self.nearest_clock_edge_delta_ns(
