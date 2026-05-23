@@ -9,13 +9,39 @@ Run:
 uv run python main.py
 ```
 
+Configuration:
+
+```json
+{
+  "pl_dcdc_clk_name": "PL_DCDC_CLK1",
+  "power_net_name_0": "3.3V_DIG",
+  "power_net_name_1": "3.3V_DIG_2",
+  "power_net_name_2": "3.3V_DIG_3",
+  "power_net_name_3": "3.3V_DIG_4",
+  "power_net_name_4": "3.3V_DIG_5",
+  "power_net_name_5": "3.3V_DIG_6",
+  "power_net_delay_ns_0": 0.0,
+  "power_net_delay_ns_1": 10.0,
+  "power_net_delay_ns_2": 20.0,
+  "power_net_delay_ns_3": 30.0,
+  "power_net_delay_ns_4": 40.0,
+  "power_net_delay_ns_5": 50.0,
+  "gate_period_us": 60.0,
+  "cds1_rise_us": 1.0,
+  "cds1_fall_us": 15.0,
+  "cds2_rise_us": 30.0,
+  "cds2_fall_us": 40.0,
+  "clock_divider": 84
+}
+```
+
 Current timing assumptions:
 
 - Main horizontal axis: us
-- CDS1: high from 1 us to 15 us by default, editable in the side panel
-- CDS2: high from 30 us to 40 us by default, editable in the side panel
-- Display range: 0 us to 60 us
-- PL_DCDC_CLK1 and 3.3V_DIG: 175 MHz divided clock, divider 84 by default, 50% duty
+- Signal names, gate period, CDS timing, and divider are loaded from `timing_config.json`
+- Display range: 0 us to `gate_period_us`
+- PL_DCDC_CLK1 and 3.3V_DIG: 175 MHz divided clock, 50% duty
+- `power_net_delay_ns_*` values are ns delays from PL_DCDC_CLK1
 - PL_DCDC_CLK1: delay is editable in ns from the side panel
 - 3.3V_DIG: nearest rising/falling edge distance from CDS1/CDS2 falling edges is shown in ns
 - Extra empty rows are reserved for up to five additional 3.3V_DIG-style signals

@@ -1,19 +1,129 @@
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 US_PER_NS = 0.001
+CONFIG_PATH = Path(__file__).with_name("timing_config.json")
 
 
 @dataclass(frozen=True)
 class PulseSignal:
     name: str
     pulses_us: tuple[tuple[float, float], ...]
+
+
+@dataclass(frozen=True)
+class TimingConfig:
+    pl_dcdc_clk_name: str = "PL_DCDC_CLK1"
+    power_net_name_0: str = "3.3V_DIG"
+    power_net_name_1: str = "3.3V_DIG_2"
+    power_net_name_2: str = "3.3V_DIG_3"
+    power_net_name_3: str = "3.3V_DIG_4"
+    power_net_name_4: str = "3.3V_DIG_5"
+    power_net_name_5: str = "3.3V_DIG_6"
+    power_net_delay_ns_0: float = 0.0
+    power_net_delay_ns_1: float = 10.0
+    power_net_delay_ns_2: float = 20.0
+    power_net_delay_ns_3: float = 30.0
+    power_net_delay_ns_4: float = 40.0
+    power_net_delay_ns_5: float = 50.0
+    gate_period_us: float = 60.0
+    cds1_rise_us: float = 1.0
+    cds1_fall_us: float = 15.0
+    cds2_rise_us: float = 30.0
+    cds2_fall_us: float = 40.0
+    clock_divider: int = 84
+
+
+def load_timing_config(path: Path = CONFIG_PATH) -> TimingConfig:
+    defaults = TimingConfig()
+    if not path.exists():
+        return defaults
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaults
+
+    try:
+        values = {
+            "pl_dcdc_clk_name": str(
+                data.get("pl_dcdc_clk_name", defaults.pl_dcdc_clk_name)
+            ),
+            "power_net_name_0": str(
+                data.get("power_net_name_0", defaults.power_net_name_0)
+            ),
+            "power_net_name_1": str(
+                data.get("power_net_name_1", defaults.power_net_name_1)
+            ),
+            "power_net_name_2": str(
+                data.get("power_net_name_2", defaults.power_net_name_2)
+            ),
+            "power_net_name_3": str(
+                data.get("power_net_name_3", defaults.power_net_name_3)
+            ),
+            "power_net_name_4": str(
+                data.get("power_net_name_4", defaults.power_net_name_4)
+            ),
+            "power_net_name_5": str(
+                data.get("power_net_name_5", defaults.power_net_name_5)
+            ),
+            "power_net_delay_ns_0": float(
+                data.get("power_net_delay_ns_0", defaults.power_net_delay_ns_0)
+            ),
+            "power_net_delay_ns_1": float(
+                data.get("power_net_delay_ns_1", defaults.power_net_delay_ns_1)
+            ),
+            "power_net_delay_ns_2": float(
+                data.get("power_net_delay_ns_2", defaults.power_net_delay_ns_2)
+            ),
+            "power_net_delay_ns_3": float(
+                data.get("power_net_delay_ns_3", defaults.power_net_delay_ns_3)
+            ),
+            "power_net_delay_ns_4": float(
+                data.get("power_net_delay_ns_4", defaults.power_net_delay_ns_4)
+            ),
+            "power_net_delay_ns_5": float(
+                data.get("power_net_delay_ns_5", defaults.power_net_delay_ns_5)
+            ),
+            "gate_period_us": float(data.get("gate_period_us", defaults.gate_period_us)),
+            "cds1_rise_us": float(data.get("cds1_rise_us", defaults.cds1_rise_us)),
+            "cds1_fall_us": float(data.get("cds1_fall_us", defaults.cds1_fall_us)),
+            "cds2_rise_us": float(data.get("cds2_rise_us", defaults.cds2_rise_us)),
+            "cds2_fall_us": float(data.get("cds2_fall_us", defaults.cds2_fall_us)),
+            "clock_divider": int(data.get("clock_divider", defaults.clock_divider)),
+        }
+    except (TypeError, ValueError):
+        return defaults
+
+    if not values["pl_dcdc_clk_name"].strip():
+        values["pl_dcdc_clk_name"] = defaults.pl_dcdc_clk_name
+    for index in range(6):
+        key = f"power_net_name_{index}"
+        if not values[key].strip():
+            values[key] = getattr(defaults, key)
+        delay_key = f"power_net_delay_ns_{index}"
+        if values[delay_key] < 0.0:
+            values[delay_key] = getattr(defaults, delay_key)
+    if values["gate_period_us"] <= 0.0:
+        values["gate_period_us"] = defaults.gate_period_us
+    if values["cds1_rise_us"] >= values["cds1_fall_us"]:
+        values["cds1_rise_us"] = defaults.cds1_rise_us
+        values["cds1_fall_us"] = defaults.cds1_fall_us
+    if values["cds2_rise_us"] >= values["cds2_fall_us"]:
+        values["cds2_rise_us"] = defaults.cds2_rise_us
+        values["cds2_fall_us"] = defaults.cds2_fall_us
+    if values["clock_divider"] < 1:
+        values["clock_divider"] = defaults.clock_divider
+
+    return TimingConfig(**values)
 
 
 class TimeAxisItem(pg.AxisItem):
@@ -89,26 +199,41 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.resize(760, 650)
 
         self.x_min_us = -2.0
-        self.x_max_us = 62.0
         self.row_gap = 1.05
         self.amplitude = 0.74
         self.source_clock_mhz = 175.0
-        self.clock_divider = 84
+        self.config = load_timing_config()
+        self.gate_period_us = self.config.gate_period_us
+        self.x_max_us = self.gate_period_us + 2.0
+        self.pl_dcdc_clk_name = self.config.pl_dcdc_clk_name
+        self.power_net_names = [
+            self.config.power_net_name_0,
+            self.config.power_net_name_1,
+            self.config.power_net_name_2,
+            self.config.power_net_name_3,
+            self.config.power_net_name_4,
+            self.config.power_net_name_5,
+        ]
+        self.power_net_delays_ns = [
+            self.config.power_net_delay_ns_0,
+            self.config.power_net_delay_ns_1,
+            self.config.power_net_delay_ns_2,
+            self.config.power_net_delay_ns_3,
+            self.config.power_net_delay_ns_4,
+            self.config.power_net_delay_ns_5,
+        ]
+        self.power_net_name_0 = self.power_net_names[0]
+        self.clock_divider = self.config.clock_divider
         self.pl_clk1_delay_ns = 0.0
-        self.cds1_start_us = 1.0
-        self.cds1_end_us = 15.0
-        self.cds2_start_us = 30.0
-        self.cds2_end_us = 40.0
+        self.cds1_start_us = self.config.cds1_rise_us
+        self.cds1_end_us = self.config.cds1_fall_us
+        self.cds2_start_us = self.config.cds2_rise_us
+        self.cds2_end_us = self.config.cds2_fall_us
         self.row_names = [
             "CDS1",
             "CDS2",
-            "PL_DCDC_CLK1",
-            "3.3V_DIG",
-            "3.3V_DIG_2",
-            "3.3V_DIG_3",
-            "3.3V_DIG_4",
-            "3.3V_DIG_5",
-            "3.3V_DIG_6",
+            self.pl_dcdc_clk_name,
+            *self.power_net_names,
         ]
         self.baselines: dict[str, float] = {}
 
@@ -168,15 +293,6 @@ class TimingDiagram(QtWidgets.QMainWindow):
         )
         self.control_panel = panel
 
-        self.cds1_start_edit = self.create_time_edit("1")
-        self.cds1_end_edit = self.create_time_edit("15")
-        self.cds2_start_edit = self.create_time_edit("30")
-        self.cds2_end_edit = self.create_time_edit("40")
-        self.divider_edit = QtWidgets.QLineEdit(str(self.clock_divider))
-        self.divider_edit.setFixedWidth(64)
-        self.divider_edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.divider_edit.setValidator(QtGui.QIntValidator(1, 1000000, self.divider_edit))
-        self.divider_edit.editingFinished.connect(self.apply_inputs)
         self.pl_clk1_delay_edit = self.create_delay_edit("0")
         self.frequency_label = QtWidgets.QLabel()
         self.frequency_label.setObjectName("result")
@@ -184,44 +300,10 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.dig_delta_labels: dict[str, QtWidgets.QLabel] = {}
 
         self.control_widgets_by_row = {
-            "CDS1": self.create_pulse_editor(
-                self.cds1_start_edit,
-                self.cds1_end_edit,
-                parent=panel,
-            ),
-            "CDS2": self.create_pulse_editor(
-                self.cds2_start_edit,
-                self.cds2_end_edit,
-                parent=panel,
-            ),
-            "PL_DCDC_CLK1": self.create_clock_editor(parent=panel),
-            "3.3V_DIG": self.create_dig_timing_editor(parent=panel),
+            self.pl_dcdc_clk_name: self.create_clock_editor(parent=panel),
+            self.power_net_name_0: self.create_dig_timing_editor(parent=panel),
         }
         return panel
-
-    def create_pulse_editor(
-        self,
-        start_edit: QtWidgets.QLineEdit,
-        end_edit: QtWidgets.QLineEdit,
-        parent: QtWidgets.QWidget,
-    ) -> QtWidgets.QWidget:
-        editor = QtWidgets.QWidget(parent)
-        layout = QtWidgets.QGridLayout(editor)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(6)
-        layout.setVerticalSpacing(4)
-
-        up_label = QtWidgets.QLabel("↑")
-        down_label = QtWidgets.QLabel("↓")
-        for label in (up_label, down_label):
-            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
-        layout.addWidget(up_label, 0, 0)
-        layout.addWidget(start_edit, 0, 1)
-        layout.addWidget(down_label, 1, 0)
-        layout.addWidget(end_edit, 1, 1)
-        editor.adjustSize()
-        return editor
 
     def create_dig_timing_editor(self, parent: QtWidgets.QWidget) -> QtWidgets.QWidget:
         editor = QtWidgets.QWidget(parent)
@@ -259,39 +341,31 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.setHorizontalSpacing(6)
         layout.setVerticalSpacing(8)
 
-        div_label = QtWidgets.QLabel("div")
         freq_label = QtWidgets.QLabel("freq")
         delay_label = QtWidgets.QLabel("delay ns")
-        layout.addWidget(div_label, 0, 0)
-        layout.addWidget(self.divider_edit, 0, 1)
-        layout.addWidget(freq_label, 1, 0)
-        layout.addWidget(self.frequency_label, 1, 1)
-        layout.addWidget(delay_label, 2, 0)
-        layout.addWidget(self.pl_clk1_delay_edit, 2, 1)
+        layout.addWidget(freq_label, 0, 0)
+        layout.addWidget(self.frequency_label, 0, 1)
+        layout.addWidget(delay_label, 1, 0)
+        layout.addWidget(self.pl_clk1_delay_edit, 1, 1)
         editor.adjustSize()
         return editor
-
-    def create_time_edit(self, text: str) -> QtWidgets.QLineEdit:
-        edit = QtWidgets.QLineEdit(text)
-        edit.setFixedWidth(64)
-        edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        validator = QtGui.QDoubleValidator(0.0, 60.0, 6, edit)
-        validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
-        edit.setValidator(validator)
-        edit.editingFinished.connect(self.apply_inputs)
-        return edit
 
     def create_delay_edit(self, text: str) -> QtWidgets.QLineEdit:
         edit = QtWidgets.QLineEdit(text)
         edit.setFixedWidth(64)
         edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        validator = QtGui.QDoubleValidator(0.0, 60000.0, 6, edit)
+        validator = QtGui.QDoubleValidator(0.0, self.gate_period_us / US_PER_NS, 6, edit)
         validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
         edit.setValidator(validator)
         edit.editingFinished.connect(self.apply_inputs)
         return edit
 
     def draw(self) -> None:
+        previous_x_range: list[float] | None = None
+        previous_y_range: list[float] | None = None
+        if self.baselines:
+            previous_x_range, previous_y_range = self.plot.viewRange()
+
         self.plot.clear()
 
         signals = [
@@ -319,17 +393,17 @@ class TimingDiagram(QtWidgets.QMainWindow):
             x, y = pulse_steps(
                 signal.pulses_us,
                 0.0,
-                60.0,
+                self.gate_period_us,
                 base - half_amp,
                 base + half_amp,
             )
             self.plot.plot(x, y, pen=waveform_pen)
 
-        pl_base = baselines["PL_DCDC_CLK1"]
+        pl_base = baselines[self.pl_dcdc_clk_name]
         pl_start_us = self.pl_clk1_delay_ns * US_PER_NS
         pl_x, pl_y = clock_steps(
             start_us=pl_start_us,
-            end_us=60.0,
+            end_us=self.gate_period_us,
             period_us=clock_period_us,
             duty=0.5,
             low=pl_base - half_amp,
@@ -340,26 +414,42 @@ class TimingDiagram(QtWidgets.QMainWindow):
             pl_y = [pl_base - half_amp, pl_base - half_amp] + pl_y
         self.plot.plot(pl_x, pl_y, pen=waveform_pen)
 
-        dig_base = baselines["3.3V_DIG"]
-        dig_x, dig_y = clock_steps(
-            start_us=20.0 * US_PER_NS,
-            end_us=60.0,
-            period_us=clock_period_us,
-            duty=0.5,
-            low=dig_base - half_amp,
-            high=dig_base + half_amp,
-        )
-        self.plot.plot(dig_x, dig_y, pen=waveform_pen)
+        for power_net_name, power_net_delay_ns in zip(
+            self.power_net_names,
+            self.power_net_delays_ns,
+            strict=True,
+        ):
+            dig_base = baselines[power_net_name]
+            dig_start_us = (self.pl_clk1_delay_ns + power_net_delay_ns) * US_PER_NS
+            dig_x, dig_y = clock_steps(
+                start_us=dig_start_us,
+                end_us=self.gate_period_us,
+                period_us=clock_period_us,
+                duty=0.5,
+                low=dig_base - half_amp,
+                high=dig_base + half_amp,
+            )
+            if dig_start_us > 0.0:
+                dig_x = [0.0, dig_start_us] + dig_x
+                dig_y = [dig_base - half_amp, dig_base - half_amp] + dig_y
+            self.plot.plot(dig_x, dig_y, pen=waveform_pen)
         self.update_dig_delta_labels(clock_period_us)
 
-        self.add_time_markers([0, self.cds1_end_us, self.cds2_end_us, 60], marker_pen)
-
-        self.plot.setXRange(self.x_min_us, self.x_max_us, padding=0)
-        self.plot.setYRange(
-            min(baselines.values()) - 0.75,
-            max(baselines.values()) + 0.75,
-            padding=0,
+        self.add_time_markers(
+            [0, self.cds1_end_us, self.cds2_end_us, self.gate_period_us],
+            marker_pen,
         )
+
+        if previous_x_range is None or previous_y_range is None:
+            self.plot.setXRange(self.x_min_us, self.x_max_us, padding=0)
+            self.plot.setYRange(
+                min(baselines.values()) - 0.75,
+                max(baselines.values()) + 0.75,
+                padding=0,
+            )
+        else:
+            self.plot.setXRange(previous_x_range[0], previous_x_range[1], padding=0)
+            self.plot.setYRange(previous_y_range[0], previous_y_range[1], padding=0)
         QtCore.QTimer.singleShot(0, self.align_control_panel)
 
     def align_control_panel(self) -> None:
@@ -391,7 +481,9 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.plot.addItem(text)
 
     def update_dig_delta_labels(self, clock_period_us: float) -> None:
-        dig_rise_start_us = 20.0 * US_PER_NS
+        dig_rise_start_us = (
+            self.pl_clk1_delay_ns + self.power_net_delays_ns[0]
+        ) * US_PER_NS
         dig_fall_start_us = dig_rise_start_us + clock_period_us * 0.5
 
         values = {
@@ -439,57 +531,12 @@ class TimingDiagram(QtWidgets.QMainWindow):
         return (nearest_edge_us - target_us) / US_PER_NS
 
     def apply_inputs(self) -> None:
-        start_us = self.parse_time_edit(self.cds1_start_edit, self.cds1_start_us)
-        end_us = self.parse_time_edit(self.cds1_end_edit, self.cds1_end_us)
-        if start_us >= end_us:
-            self.cds1_start_edit.setText(f"{self.cds1_start_us:g}")
-            self.cds1_end_edit.setText(f"{self.cds1_end_us:g}")
-            return
-
-        cds2_start_us = self.parse_time_edit(self.cds2_start_edit, self.cds2_start_us)
-        cds2_end_us = self.parse_time_edit(self.cds2_end_edit, self.cds2_end_us)
-        if cds2_start_us >= cds2_end_us:
-            self.cds2_start_edit.setText(f"{self.cds2_start_us:g}")
-            self.cds2_end_edit.setText(f"{self.cds2_end_us:g}")
-            return
-
-        divider = self.parse_divider_edit()
-        if divider is None:
-            return
         pl_clk1_delay_ns = self.parse_delay_edit()
         if pl_clk1_delay_ns is None:
             return
 
-        self.cds1_start_us = start_us
-        self.cds1_end_us = end_us
-        self.cds2_start_us = cds2_start_us
-        self.cds2_end_us = cds2_end_us
-        self.clock_divider = divider
         self.pl_clk1_delay_ns = pl_clk1_delay_ns
-        self.update_frequency_label()
         self.draw()
-
-    def parse_time_edit(self, edit: QtWidgets.QLineEdit, fallback: float) -> float:
-        text = edit.text().strip()
-        try:
-            return float(text)
-        except ValueError:
-            edit.setText(f"{fallback:g}")
-            return fallback
-
-    def parse_divider_edit(self) -> int | None:
-        text = self.divider_edit.text().strip()
-        try:
-            divider = int(text)
-        except ValueError:
-            self.divider_edit.setText(str(self.clock_divider))
-            return None
-
-        if divider < 1:
-            self.divider_edit.setText(str(self.clock_divider))
-            return None
-
-        return divider
 
     def parse_delay_edit(self) -> float | None:
         text = self.pl_clk1_delay_edit.text().strip()
@@ -499,7 +546,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.pl_clk1_delay_edit.setText(f"{self.pl_clk1_delay_ns:g}")
             return None
 
-        if delay_ns < 0.0 or delay_ns > 60000.0:
+        if delay_ns < 0.0 or delay_ns > self.gate_period_us / US_PER_NS:
             self.pl_clk1_delay_edit.setText(f"{self.pl_clk1_delay_ns:g}")
             return None
 
