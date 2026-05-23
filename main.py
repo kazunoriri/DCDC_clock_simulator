@@ -20,7 +20,8 @@ CONTROL_ROW_HEIGHT_PX = 48
 MAX_PL_DELAY_NS = 250.0
 PLOT_BOTTOM_AXIS_HEIGHT_PX = 62
 TIMING_LEFT_AXIS_WIDTH_PX = 120
-MARGIN_LEFT_AXIS_WIDTH_PX = 120
+MARGIN_LEFT_AXIS_WIDTH_PX = 75
+SWEEP_LEFT_AXIS_WIDTH_PX = 75
 MAX_POWER_TICK_LABEL_CHARS = 12
 CONFIG_PATH = Path(__file__).with_name("timing_config.json")
 
@@ -234,7 +235,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("DCDC Clock Timing")
-        self.resize(1320, 720)
+        self.resize(1760, 720)
 
         self.x_min_us = -2.0
         self.row_gap = 1.05
@@ -269,6 +270,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.cds2_end_us = self.config.cds2_fall_us
         self.font_family = get_preferred_font_family()
         self.app_font = QtGui.QFont(self.font_family, APP_FONT_SIZE_PT)
+        self.pl_delay_candidates_ns = self.create_pl_delay_candidates_ns()
         self.row_names = [
             "CDS1",
             "CDS2",
@@ -292,16 +294,20 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.setVerticalSpacing(ROW_SPACING_PX)
         layout.setColumnStretch(0, 100)
         layout.setColumnStretch(1, 100)
+        layout.setColumnStretch(2, 100)
         layout.setRowStretch(0, 1)
         layout.setRowStretch(1, 0)
         layout.setRowMinimumHeight(1, CONTROL_ROW_HEIGHT_PX)
 
         self.plot = pg.PlotWidget(axisItems={"bottom": TimeAxisItem(orientation="bottom")})
         self.margin_plot = pg.PlotWidget()
+        self.delay_sweep_plot = pg.PlotWidget()
         layout.addWidget(self.plot, 0, 0)
         layout.addWidget(self.margin_plot, 0, 1)
+        layout.addWidget(self.delay_sweep_plot, 0, 2)
         layout.addWidget(self.create_control_panel(), 1, 0)
         layout.addWidget(self.create_margin_legend(), 1, 1)
+        layout.addWidget(QtWidgets.QWidget(), 1, 2)
         self.setCentralWidget(central)
 
         self.plot.setBackground("#000000")
@@ -346,7 +352,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
             **self.axis_label_style(),
         )
         self.margin_plot.setTitle(
-            "CDS↓ to power edge delta",
+            "CDS1,2↓ to switching edge delta",
             color="#b8c3d1",
             size=f"{TITLE_FONT_SIZE_PT}pt",
         )
@@ -365,6 +371,41 @@ class TimingDiagram(QtWidgets.QMainWindow):
             )
         margin_bottom_axis.setHeight(PLOT_BOTTOM_AXIS_HEIGHT_PX)
         margin_left_axis.setWidth(MARGIN_LEFT_AXIS_WIDTH_PX)
+
+        self.delay_sweep_plot.setBackground("#000000")
+        self.delay_sweep_plot.showGrid(x=True, y=True, alpha=0.34)
+        self.delay_sweep_plot.setLabel(
+            "left",
+            "delta [ns]",
+            **self.axis_label_style(),
+        )
+        self.delay_sweep_plot.setLabel(
+            "bottom",
+            f"{self.pl_dcdc_clk_name} delay [ns]",
+            **self.axis_label_style(),
+        )
+        self.delay_sweep_plot.setTitle(
+            "delta vs delay",
+            color="#b8c3d1",
+            size=f"{TITLE_FONT_SIZE_PT}pt",
+        )
+        self.delay_sweep_plot.setMouseEnabled(x=True, y=False)
+        self.delay_sweep_plot.setMenuEnabled(False)
+        self.delay_sweep_plot.getPlotItem().getViewBox().setBorder(
+            pg.mkPen("#606060", width=1)
+        )
+        sweep_bottom_axis = self.delay_sweep_plot.getAxis("bottom")
+        sweep_left_axis = self.delay_sweep_plot.getAxis("left")
+        for axis in (sweep_bottom_axis, sweep_left_axis):
+            axis.setPen(pg.mkPen("#808080"))
+            axis.setTextPen(pg.mkPen("#b8c3d1"))
+            axis.setStyle(
+                tickFont=self.app_font,
+                tickTextOffset=6,
+                autoExpandTextSpace=True,
+            )
+        sweep_bottom_axis.setHeight(PLOT_BOTTOM_AXIS_HEIGHT_PX)
+        sweep_left_axis.setWidth(SWEEP_LEFT_AXIS_WIDTH_PX)
 
         self.draw()
 
@@ -461,17 +502,23 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.addStretch(1)
         return legend
 
-    def create_delay_combo(self) -> QtWidgets.QComboBox:
-        combo = QtWidgets.QComboBox()
-        combo.setFixedWidth(86)
+    def create_pl_delay_candidates_ns(self) -> list[float]:
+        candidates: list[float] = []
         source_period_ns = 1000.0 / self.source_clock_mhz
         step = 0
         while True:
             delay_ns = step * source_period_ns
             if delay_ns > MAX_PL_DELAY_NS + 1e-9:
                 break
-            combo.addItem(f"{delay_ns:.1f}", delay_ns)
+            candidates.append(delay_ns)
             step += 1
+        return candidates
+
+    def create_delay_combo(self) -> QtWidgets.QComboBox:
+        combo = QtWidgets.QComboBox()
+        combo.setFixedWidth(86)
+        for delay_ns in self.pl_delay_candidates_ns:
+            combo.addItem(f"{delay_ns:.1f}", delay_ns)
         combo.currentIndexChanged.connect(self.apply_inputs)
         return combo
 
@@ -570,6 +617,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
                 dig_y = [dig_base - half_amp, dig_base - half_amp] + dig_y
             self.plot.plot(dig_x, dig_y, pen=waveform_pen)
         self.draw_margin_plot(clock_period_us)
+        self.draw_delay_sweep_plot(clock_period_us)
 
         self.add_time_markers(
             [0, self.cds1_end_us, self.cds2_end_us, self.gate_period_us],
@@ -648,13 +696,82 @@ class TimingDiagram(QtWidgets.QMainWindow):
                 symbolBrush=pg.mkBrush(brush_color) if brush_color else None,
             )
 
+    def draw_delay_sweep_plot(self, clock_period_us: float) -> None:
+        self.delay_sweep_plot.clear()
+        self.delay_sweep_plot.setXRange(-1.0, MAX_PL_DELAY_NS + 1.0, padding=0)
+        self.delay_sweep_plot.setYRange(
+            -POWER_MARGIN_RANGE_NS,
+            POWER_MARGIN_RANGE_NS,
+            padding=0,
+        )
+        self.delay_sweep_plot.addItem(
+            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#d0d7de", width=2))
+        )
+        for value_ns in (-POWER_MARGIN_RANGE_NS, POWER_MARGIN_RANGE_NS):
+            self.delay_sweep_plot.addItem(
+                pg.InfiniteLine(
+                    pos=value_ns,
+                    angle=0,
+                    pen=pg.mkPen("#8a8a8a", width=1, style=QtCore.Qt.PenStyle.DashLine),
+                )
+            )
+
+        series = [
+            ("cds1_rise", -0.18, self.triangle_symbol(up=True), "#58a6ff", None),
+            ("cds1_fall", -0.06, self.triangle_symbol(up=False), "#58a6ff", None),
+            (
+                "cds2_rise",
+                0.06,
+                self.triangle_symbol(up=True),
+                "#f0883e",
+                "#f0883e",
+            ),
+            (
+                "cds2_fall",
+                0.18,
+                self.triangle_symbol(up=False),
+                "#f0883e",
+                "#f0883e",
+            ),
+        ]
+        power_offsets = [
+            (index - (len(self.power_net_names) - 1) * 0.5) * 0.16
+            for index in range(len(self.power_net_names))
+        ]
+
+        for key, series_offset, symbol, color, brush_color in series:
+            x_values: list[float] = []
+            y_values: list[float] = []
+            for delay_ns in self.pl_delay_candidates_ns:
+                deltas = self.calculate_power_edge_deltas_ns(
+                    clock_period_us,
+                    pl_delay_ns=delay_ns,
+                )
+                for power_index, entry in enumerate(deltas):
+                    x_values.append(delay_ns + series_offset + power_offsets[power_index])
+                    y_values.append(entry[key])
+
+            self.delay_sweep_plot.plot(
+                x_values,
+                y_values,
+                pen=None,
+                symbol=symbol,
+                symbolSize=7,
+                symbolPen=pg.mkPen(color, width=1.2),
+                symbolBrush=pg.mkBrush(brush_color) if brush_color else None,
+            )
+
     def calculate_power_edge_deltas_ns(
         self,
         clock_period_us: float,
+        pl_delay_ns: float | None = None,
     ) -> list[dict[str, float]]:
+        if pl_delay_ns is None:
+            pl_delay_ns = self.pl_clk1_delay_ns
+
         deltas: list[dict[str, float]] = []
         for power_net_delay_ns in self.power_net_delays_ns:
-            rise_start_us = (self.pl_clk1_delay_ns + power_net_delay_ns) * US_PER_NS
+            rise_start_us = (pl_delay_ns + power_net_delay_ns) * US_PER_NS
             fall_start_us = rise_start_us + clock_period_us * 0.5
             deltas.append(
                 {
