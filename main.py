@@ -28,6 +28,69 @@ CONFIG_PATH = Path(__file__).with_name("timing_config.json")
 
 
 @dataclass(frozen=True)
+class PlotTheme:
+    background: str
+    text: str
+    title: str
+    axis: str
+    border: str
+    grid_alpha: float
+    waveform: str
+    marker: str
+    zero_line: str
+    cds1: str
+    cds2: str
+    control_background: str
+    control_border: str
+    control_text: str
+    selection_background: str
+    button_background: str
+    button_hover: str
+
+
+SCREEN_THEME = PlotTheme(
+    background="#000000",
+    text="#b8c3d1",
+    title="#b8c3d1",
+    axis="#808080",
+    border="#606060",
+    grid_alpha=0.34,
+    waveform="#ffff00",
+    marker="#8a8a8a",
+    zero_line="#d0d7de",
+    cds1="#58a6ff",
+    cds2="#f0883e",
+    control_background="#555555",
+    control_border="#606060",
+    control_text="#f1f5f9",
+    selection_background="#1f6feb",
+    button_background="#555555",
+    button_hover="#666666",
+)
+
+
+COPY_THEME = PlotTheme(
+    background="#ffffff",
+    text="#20242a",
+    title="#20242a",
+    axis="#4b5563",
+    border="#8b949e",
+    grid_alpha=0.22,
+    waveform="#0057d8",
+    marker="#7a7f87",
+    zero_line="#30363d",
+    cds1="#0057d8",
+    cds2="#f97316",
+    control_background="#ffffff",
+    control_border="#8b949e",
+    control_text="#20242a",
+    selection_background="#9ec5ff",
+    button_background="#e5e7eb",
+    button_hover="#d1d5db",
+)
+
+
+@dataclass(frozen=True)
 class PulseSignal:
     name: str
     pulses_us: tuple[tuple[float, float], ...]
@@ -242,11 +305,20 @@ def clock_steps(
 
 
 class TimingDiagram(QtWidgets.QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        export_mode: bool = False,
+        include_copy_button: bool = True,
+    ) -> None:
         super().__init__()
+        self.export_mode = export_mode
+        self.include_copy_button = include_copy_button
+        self.theme = COPY_THEME if export_mode else SCREEN_THEME
         self.setWindowTitle("DCDC Clock Timing")
         self.resize(1760, 720)
-        self.move(0, 0)
+        if not self.export_mode:
+            self.move(0, 0)
 
         self.x_min_us = -2.0
         self.row_gap = 1.05
@@ -309,10 +381,12 @@ class TimingDiagram(QtWidgets.QMainWindow):
         ]
         self.baselines: dict[str, float] = {}
 
-        pg.setConfigOptions(antialias=True, background="k", foreground="#b8c3d1")
+        pg.setConfigOptions(antialias=True)
 
         central = QtWidgets.QWidget()
-        central.setStyleSheet("background: #000000; color: #b8c3d1;")
+        central.setStyleSheet(
+            f"background: {self.theme.background}; color: {self.theme.text};"
+        )
         layout = QtWidgets.QGridLayout(central)
         layout.setContentsMargins(
             OUTER_MARGIN_PX,
@@ -337,14 +411,17 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.addWidget(self.delay_sweep_plot, 0, 2)
         layout.addWidget(self.create_control_panel(), 1, 0)
         layout.addWidget(self.create_margin_legend(), 1, 1)
-        layout.addWidget(QtWidgets.QWidget(), 1, 2)
+        if self.include_copy_button:
+            layout.addWidget(self.create_copy_button_panel(), 1, 2)
+        else:
+            layout.addWidget(QtWidgets.QWidget(), 1, 2)
         self.setCentralWidget(central)
 
-        self.plot.setBackground("#000000")
-        self.plot.showGrid(x=True, y=True, alpha=0.34)
+        self.plot.setBackground(self.theme.background)
+        self.plot.showGrid(x=True, y=True, alpha=self.theme.grid_alpha)
         self.plot.setTitle(
             "Timing waveform",
-            color="#b8c3d1",
+            color=self.theme.title,
             size=f"{TITLE_FONT_SIZE_PT}pt",
         )
         self.plot.setLabel(
@@ -354,13 +431,15 @@ class TimingDiagram(QtWidgets.QMainWindow):
         )
         self.plot.setMouseEnabled(x=True, y=False)
         self.plot.setMenuEnabled(False)
-        self.plot.getPlotItem().getViewBox().setBorder(pg.mkPen("#606060", width=1))
+        self.plot.getPlotItem().getViewBox().setBorder(
+            pg.mkPen(self.theme.border, width=1)
+        )
 
         bottom_axis = self.plot.getAxis("bottom")
         left_axis = self.plot.getAxis("left")
         for axis in (bottom_axis, left_axis):
-            axis.setPen(pg.mkPen("#808080"))
-            axis.setTextPen(pg.mkPen("#b8c3d1"))
+            axis.setPen(pg.mkPen(self.theme.axis))
+            axis.setTextPen(pg.mkPen(self.theme.text))
             axis.setStyle(
                 tickFont=self.app_font,
                 tickTextOffset=8,
@@ -369,8 +448,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
         bottom_axis.setHeight(PLOT_BOTTOM_AXIS_HEIGHT_PX)
         left_axis.setWidth(TIMING_LEFT_AXIS_WIDTH_PX)
 
-        self.margin_plot.setBackground("#000000")
-        self.margin_plot.showGrid(x=False, y=True, alpha=0.34)
+        self.margin_plot.setBackground(self.theme.background)
+        self.margin_plot.showGrid(x=False, y=True, alpha=self.theme.grid_alpha)
         self.margin_plot.setLabel(
             "left",
             "delta [ns]",
@@ -383,17 +462,19 @@ class TimingDiagram(QtWidgets.QMainWindow):
         )
         self.margin_plot.setTitle(
             "CDS1,2↓ to switching edge delta",
-            color="#b8c3d1",
+            color=self.theme.title,
             size=f"{TITLE_FONT_SIZE_PT}pt",
         )
         self.margin_plot.setMouseEnabled(x=False, y=False)
         self.margin_plot.setMenuEnabled(False)
-        self.margin_plot.getPlotItem().getViewBox().setBorder(pg.mkPen("#606060", width=1))
+        self.margin_plot.getPlotItem().getViewBox().setBorder(
+            pg.mkPen(self.theme.border, width=1)
+        )
         margin_bottom_axis = self.margin_plot.getAxis("bottom")
         margin_left_axis = self.margin_plot.getAxis("left")
         for axis in (margin_bottom_axis, margin_left_axis):
-            axis.setPen(pg.mkPen("#808080"))
-            axis.setTextPen(pg.mkPen("#b8c3d1"))
+            axis.setPen(pg.mkPen(self.theme.axis))
+            axis.setTextPen(pg.mkPen(self.theme.text))
             axis.setStyle(
                 tickFont=self.app_font,
                 tickTextOffset=6,
@@ -402,8 +483,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
         margin_bottom_axis.setHeight(PLOT_BOTTOM_AXIS_HEIGHT_PX)
         margin_left_axis.setWidth(MARGIN_LEFT_AXIS_WIDTH_PX)
 
-        self.delay_sweep_plot.setBackground("#000000")
-        self.delay_sweep_plot.showGrid(x=True, y=True, alpha=0.34)
+        self.delay_sweep_plot.setBackground(self.theme.background)
+        self.delay_sweep_plot.showGrid(x=True, y=True, alpha=self.theme.grid_alpha)
         self.delay_sweep_plot.setLabel(
             "left",
             "delta [ns]",
@@ -416,19 +497,19 @@ class TimingDiagram(QtWidgets.QMainWindow):
         )
         self.delay_sweep_plot.setTitle(
             "delta vs delay",
-            color="#b8c3d1",
+            color=self.theme.title,
             size=f"{TITLE_FONT_SIZE_PT}pt",
         )
         self.delay_sweep_plot.setMouseEnabled(x=True, y=False)
         self.delay_sweep_plot.setMenuEnabled(False)
         self.delay_sweep_plot.getPlotItem().getViewBox().setBorder(
-            pg.mkPen("#606060", width=1)
+            pg.mkPen(self.theme.border, width=1)
         )
         sweep_bottom_axis = self.delay_sweep_plot.getAxis("bottom")
         sweep_left_axis = self.delay_sweep_plot.getAxis("left")
         for axis in (sweep_bottom_axis, sweep_left_axis):
-            axis.setPen(pg.mkPen("#808080"))
-            axis.setTextPen(pg.mkPen("#b8c3d1"))
+            axis.setPen(pg.mkPen(self.theme.axis))
+            axis.setTextPen(pg.mkPen(self.theme.text))
             axis.setStyle(
                 tickFont=self.app_font,
                 tickTextOffset=6,
@@ -441,7 +522,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
     def axis_label_style(self) -> dict[str, str]:
         return {
-            "color": "#b8c3d1",
+            "color": self.theme.text,
             "font-size": f"{APP_FONT_SIZE_PT}pt",
             "font-family": self.font_family,
         }
@@ -451,30 +532,30 @@ class TimingDiagram(QtWidgets.QMainWindow):
         panel.setStyleSheet(
             f"""
             QLabel {{
-                color: #b8c3d1;
+                color: {self.theme.text};
                 font-family: "{self.font_family}";
                 font-size: {APP_FONT_SIZE_PT}pt;
             }}
             QLineEdit {{
-                background: #555555;
-                border: 1px solid #606060;
-                color: #f1f5f9;
+                background: {self.theme.control_background};
+                border: 1px solid {self.theme.control_border};
+                color: {self.theme.control_text};
                 font-family: "{self.font_family}";
                 font-size: {APP_FONT_SIZE_PT}pt;
                 padding: 2px 6px;
-                selection-background-color: #1f6feb;
+                selection-background-color: {self.theme.selection_background};
             }}
             QComboBox {{
-                background: #555555;
-                border: 1px solid #606060;
-                color: #f1f5f9;
+                background: {self.theme.control_background};
+                border: 1px solid {self.theme.control_border};
+                color: {self.theme.control_text};
                 font-family: "{self.font_family}";
                 font-size: {APP_FONT_SIZE_PT}pt;
                 padding: 2px 6px;
-                selection-background-color: #1f6feb;
+                selection-background-color: {self.theme.selection_background};
             }}
             QLabel#result {{
-                color: #b8c3d1;
+                color: {self.theme.text};
             }}
             """
         )
@@ -489,6 +570,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.pl_clk1_delay_combo = self.create_delay_combo()
         self.control_widgets_by_row: dict[str, QtWidgets.QWidget] = {}
 
+        layout.addWidget(self.frequency_label)
         layout.addWidget(self.create_clock_editor(parent=panel))
         layout.addStretch(1)
         return panel
@@ -516,10 +598,10 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.setSpacing(18)
 
         entries = [
-            ("△", "CDS1↓ to SW↑", "#58a6ff"),
-            ("▽", "CDS1↓ to SW↓", "#58a6ff"),
-            ("▲", "CDS2↓ to SW↑", "#f0883e"),
-            ("▼", "CDS2↓ to SW↓", "#f0883e"),
+            ("△", "CDS1↓ to SW↑", self.theme.cds1),
+            ("▽", "CDS1↓ to SW↓", self.theme.cds1),
+            ("▲", "CDS2↓ to SW↑", self.theme.cds2),
+            ("▼", "CDS2↓ to SW↓", self.theme.cds2),
         ]
         for marker, text, color in entries:
             label = QtWidgets.QLabel(f"{marker} {text}")
@@ -531,6 +613,40 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.insertStretch(0, 1)
         layout.addStretch(1)
         return legend
+
+    def create_copy_button_panel(self) -> QtWidgets.QWidget:
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(panel)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.addStretch(1)
+
+        button = QtWidgets.QPushButton("copy image")
+        self.copy_image_button = button
+        button.setFixedWidth(104)
+        button.setFixedHeight(30)
+        button.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {self.theme.button_background};
+                border: 1px solid {self.theme.control_border};
+                color: {self.theme.control_text};
+                font-family: "{self.font_family}";
+                font-size: {APP_FONT_SIZE_PT}pt;
+                padding: 4px 12px;
+            }}
+            QPushButton:hover {{
+                background: {self.theme.button_hover};
+            }}
+            QPushButton:pressed {{
+                background: {self.theme.control_border};
+                padding-top: 5px;
+                padding-bottom: 3px;
+            }}
+            """
+        )
+        button.clicked.connect(self.copy_image_to_clipboard)
+        layout.addWidget(button)
+        return panel
 
     def create_pl_delay_candidates_ns(self) -> list[float]:
         candidates: list[float] = []
@@ -586,8 +702,12 @@ class TimingDiagram(QtWidgets.QMainWindow):
             PulseSignal("CDS2", ((self.cds2_start_us, self.cds2_end_us),)),
         ]
 
-        waveform_pen = pg.mkPen("#ffff00", width=1)
-        marker_pen = pg.mkPen("#8a8a8a", width=1, style=QtCore.Qt.PenStyle.DashLine)
+        waveform_pen = pg.mkPen(self.theme.waveform, width=1)
+        marker_pen = pg.mkPen(
+            self.theme.marker,
+            width=1,
+            style=QtCore.Qt.PenStyle.DashLine,
+        )
 
         baselines = {
             name: (len(self.row_names) - index - 1) * self.row_gap
@@ -684,34 +804,44 @@ class TimingDiagram(QtWidgets.QMainWindow):
         )
 
         self.margin_plot.addItem(
-            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#d0d7de", width=2))
+            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(self.theme.zero_line, width=2))
         )
         for value_ns in (-POWER_MARGIN_RANGE_NS, POWER_MARGIN_RANGE_NS):
             self.margin_plot.addItem(
                 pg.InfiniteLine(
                     pos=value_ns,
                     angle=0,
-                    pen=pg.mkPen("#8a8a8a", width=1, style=QtCore.Qt.PenStyle.DashLine),
+                    pen=pg.mkPen(
+                        self.theme.marker,
+                        width=1,
+                        style=QtCore.Qt.PenStyle.DashLine,
+                    ),
                 )
             )
 
         deltas = self.calculate_power_edge_deltas_ns(clock_period_us)
         series = [
-            ("cds1_rise", -0.18, self.triangle_symbol(up=True), "#58a6ff", None),
-            ("cds1_fall", -0.06, self.triangle_symbol(up=False), "#58a6ff", None),
+            ("cds1_rise", -0.18, self.triangle_symbol(up=True), self.theme.cds1, None),
+            (
+                "cds1_fall",
+                -0.06,
+                self.triangle_symbol(up=False),
+                self.theme.cds1,
+                None,
+            ),
             (
                 "cds2_rise",
                 0.06,
                 self.triangle_symbol(up=True),
-                "#f0883e",
-                "#f0883e",
+                self.theme.cds2,
+                self.theme.cds2,
             ),
             (
                 "cds2_fall",
                 0.18,
                 self.triangle_symbol(up=False),
-                "#f0883e",
-                "#f0883e",
+                self.theme.cds2,
+                self.theme.cds2,
             ),
         ]
         for key, x_offset, symbol, color, brush_color in series:
@@ -736,33 +866,43 @@ class TimingDiagram(QtWidgets.QMainWindow):
             padding=0,
         )
         self.delay_sweep_plot.addItem(
-            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#d0d7de", width=2))
+            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(self.theme.zero_line, width=2))
         )
         for value_ns in (-POWER_MARGIN_RANGE_NS, POWER_MARGIN_RANGE_NS):
             self.delay_sweep_plot.addItem(
                 pg.InfiniteLine(
                     pos=value_ns,
                     angle=0,
-                    pen=pg.mkPen("#8a8a8a", width=1, style=QtCore.Qt.PenStyle.DashLine),
+                    pen=pg.mkPen(
+                        self.theme.marker,
+                        width=1,
+                        style=QtCore.Qt.PenStyle.DashLine,
+                    ),
                 )
             )
 
         series = [
-            ("cds1_rise", -0.18, self.triangle_symbol(up=True), "#58a6ff", None),
-            ("cds1_fall", -0.06, self.triangle_symbol(up=False), "#58a6ff", None),
+            ("cds1_rise", -0.18, self.triangle_symbol(up=True), self.theme.cds1, None),
+            (
+                "cds1_fall",
+                -0.06,
+                self.triangle_symbol(up=False),
+                self.theme.cds1,
+                None,
+            ),
             (
                 "cds2_rise",
                 0.06,
                 self.triangle_symbol(up=True),
-                "#f0883e",
-                "#f0883e",
+                self.theme.cds2,
+                self.theme.cds2,
             ),
             (
                 "cds2_fall",
                 0.18,
                 self.triangle_symbol(up=False),
-                "#f0883e",
-                "#f0883e",
+                self.theme.cds2,
+                self.theme.cds2,
             ),
         ]
         power_offsets = [
@@ -855,7 +995,11 @@ class TimingDiagram(QtWidgets.QMainWindow):
             )
             self.plot.addItem(line)
 
-            text = pg.TextItem(f"{value_us:g} us", color="#b8c3d1", anchor=(0.5, 0))
+            text = pg.TextItem(
+                f"{value_us:g} us",
+                color=self.theme.text,
+                anchor=(0.5, 0),
+            )
             text.setFont(self.app_font)
             text.setPos(value_us, -0.66)
             self.plot.addItem(text)
@@ -895,6 +1039,58 @@ class TimingDiagram(QtWidgets.QMainWindow):
     def update_frequency_label(self) -> None:
         frequency_mhz = self.source_clock_mhz / self.clock_divider
         self.frequency_label.setText(f"{frequency_mhz:.2f} [MHz]")
+
+    def plot_view_ranges(self) -> dict[str, tuple[list[float], list[float]]]:
+        return {
+            "plot": self.plot.viewRange(),
+            "margin_plot": self.margin_plot.viewRange(),
+            "delay_sweep_plot": self.delay_sweep_plot.viewRange(),
+        }
+
+    def apply_plot_view_ranges(
+        self,
+        ranges: dict[str, tuple[list[float], list[float]]],
+    ) -> None:
+        for attr_name, (x_range, y_range) in ranges.items():
+            plot_widget = getattr(self, attr_name)
+            plot_widget.setXRange(x_range[0], x_range[1], padding=0)
+            plot_widget.setYRange(y_range[0], y_range[1], padding=0)
+
+    def copy_image_to_clipboard(self) -> None:
+        copy_window: TimingDiagram | None = None
+        try:
+            copy_window = TimingDiagram(
+                export_mode=True,
+                include_copy_button=False,
+            )
+            copy_window.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen,
+                True,
+            )
+            copy_window.resize(self.size())
+            copy_window.pl_clk1_delay_combo.setCurrentIndex(
+                self.pl_clk1_delay_combo.currentIndex()
+            )
+            copy_window.pl_clk1_delay_ns = self.pl_clk1_delay_ns
+            copy_window.draw()
+            copy_window.apply_plot_view_ranges(self.plot_view_ranges())
+            copy_window.show()
+            QtWidgets.QApplication.processEvents()
+
+            pixmap = copy_window.centralWidget().grab()
+            QtWidgets.QApplication.clipboard().setPixmap(pixmap)
+            self.show_copy_feedback()
+        finally:
+            if copy_window is not None:
+                copy_window.close()
+                copy_window.deleteLater()
+
+    def show_copy_feedback(self) -> None:
+        button = getattr(self, "copy_image_button", None)
+        if button is None:
+            return
+        button.setText("copied")
+        QtCore.QTimer.singleShot(700, lambda: button.setText("copy image"))
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
