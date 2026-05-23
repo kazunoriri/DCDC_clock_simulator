@@ -1121,15 +1121,6 @@ class TimingDiagram(QtWidgets.QMainWindow):
             )
             self.plot.addItem(line)
 
-            text = pg.TextItem(
-                f"{value_us:g} us",
-                color=self.theme.text,
-                anchor=(0.5, 0),
-            )
-            text.setFont(self.app_font)
-            text.setPos(value_us, -0.66)
-            self.plot.addItem(text)
-
     def nearest_clock_edge_delta_ns(
         self,
         target_us: float,
