@@ -10,6 +10,18 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 US_PER_NS = 0.001
+POWER_MARGIN_RANGE_NS = 250.0
+TITLE_FONT_SIZE_PT = 12
+APP_FONT_SIZE_PT = 11
+OUTER_MARGIN_PX = 12
+GRAPH_SPACING_PX = 24
+ROW_SPACING_PX = 14
+CONTROL_ROW_HEIGHT_PX = 48
+MAX_PL_DELAY_NS = 250.0
+PLOT_BOTTOM_AXIS_HEIGHT_PX = 62
+TIMING_LEFT_AXIS_WIDTH_PX = 120
+MARGIN_LEFT_AXIS_WIDTH_PX = 120
+MAX_POWER_TICK_LABEL_CHARS = 12
 CONFIG_PATH = Path(__file__).with_name("timing_config.json")
 
 
@@ -126,6 +138,24 @@ def load_timing_config(path: Path = CONFIG_PATH) -> TimingConfig:
     return TimingConfig(**values)
 
 
+def get_preferred_font_family() -> str:
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return "Sans Serif"
+
+    families = set(QtGui.QFontDatabase.families())
+    for family in (
+        "Yu Gothic UI",
+        "Hiragino Sans",
+        "Hiragino Kaku Gothic ProN",
+        "Arial Unicode MS",
+        "Meiryo",
+    ):
+        if family in families:
+            return family
+    return app.font().family()
+
+
 class TimeAxisItem(pg.AxisItem):
     def tickStrings(self, values, scale, spacing):  # noqa: N802
         if spacing >= 1:
@@ -144,6 +174,14 @@ class TimeAxisItem(pg.AxisItem):
             text = f"{value * scale:.{digits}f}"
             labels.append(text.rstrip("0").rstrip(".") if "." in text else text)
         return labels
+
+
+def shorten_tick_label(text: str, max_chars: int = MAX_POWER_TICK_LABEL_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 1:
+        return text[:max_chars]
+    return text[: max_chars - 1] + "…"
 
 
 def pulse_steps(
@@ -196,7 +234,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("DCDC Clock Timing")
-        self.resize(760, 650)
+        self.resize(1320, 720)
 
         self.x_min_us = -2.0
         self.row_gap = 1.05
@@ -229,6 +267,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.cds1_end_us = self.config.cds1_fall_us
         self.cds2_start_us = self.config.cds2_rise_us
         self.cds2_end_us = self.config.cds2_fall_us
+        self.font_family = get_preferred_font_family()
+        self.app_font = QtGui.QFont(self.font_family, APP_FONT_SIZE_PT)
         self.row_names = [
             "CDS1",
             "CDS2",
@@ -241,18 +281,41 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
         central = QtWidgets.QWidget()
         central.setStyleSheet("background: #000000; color: #b8c3d1;")
-        layout = QtWidgets.QHBoxLayout(central)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        layout = QtWidgets.QGridLayout(central)
+        layout.setContentsMargins(
+            OUTER_MARGIN_PX,
+            OUTER_MARGIN_PX,
+            OUTER_MARGIN_PX,
+            OUTER_MARGIN_PX,
+        )
+        layout.setHorizontalSpacing(GRAPH_SPACING_PX)
+        layout.setVerticalSpacing(ROW_SPACING_PX)
+        layout.setColumnStretch(0, 100)
+        layout.setColumnStretch(1, 100)
+        layout.setRowStretch(0, 1)
+        layout.setRowStretch(1, 0)
+        layout.setRowMinimumHeight(1, CONTROL_ROW_HEIGHT_PX)
 
         self.plot = pg.PlotWidget(axisItems={"bottom": TimeAxisItem(orientation="bottom")})
-        layout.addWidget(self.plot, stretch=1)
-        layout.addWidget(self.create_control_panel())
+        self.margin_plot = pg.PlotWidget()
+        layout.addWidget(self.plot, 0, 0)
+        layout.addWidget(self.margin_plot, 0, 1)
+        layout.addWidget(self.create_control_panel(), 1, 0)
+        layout.addWidget(self.create_margin_legend(), 1, 1)
         self.setCentralWidget(central)
 
         self.plot.setBackground("#000000")
         self.plot.showGrid(x=True, y=True, alpha=0.34)
-        self.plot.setLabel("bottom", "time [us]", color="#b8c3d1")
+        self.plot.setTitle(
+            "Timing waveform",
+            color="#b8c3d1",
+            size=f"{TITLE_FONT_SIZE_PT}pt",
+        )
+        self.plot.setLabel(
+            "bottom",
+            "time [us]",
+            **self.axis_label_style(),
+        )
         self.plot.setMouseEnabled(x=True, y=False)
         self.plot.setMenuEnabled(False)
         self.plot.getPlotItem().getViewBox().setBorder(pg.mkPen("#606060", width=1))
@@ -262,103 +325,176 @@ class TimingDiagram(QtWidgets.QMainWindow):
         for axis in (bottom_axis, left_axis):
             axis.setPen(pg.mkPen("#808080"))
             axis.setTextPen(pg.mkPen("#b8c3d1"))
-            axis.setStyle(tickFont=QtGui.QFont("Meiryo", 9), autoExpandTextSpace=True)
+            axis.setStyle(
+                tickFont=self.app_font,
+                tickTextOffset=8,
+                autoExpandTextSpace=True,
+            )
+        bottom_axis.setHeight(PLOT_BOTTOM_AXIS_HEIGHT_PX)
+        left_axis.setWidth(TIMING_LEFT_AXIS_WIDTH_PX)
+
+        self.margin_plot.setBackground("#000000")
+        self.margin_plot.showGrid(x=False, y=True, alpha=0.34)
+        self.margin_plot.setLabel(
+            "left",
+            "delta [ns]",
+            **self.axis_label_style(),
+        )
+        self.margin_plot.setLabel(
+            "bottom",
+            "電源名",
+            **self.axis_label_style(),
+        )
+        self.margin_plot.setTitle(
+            "CDS↓ to power edge delta",
+            color="#b8c3d1",
+            size=f"{TITLE_FONT_SIZE_PT}pt",
+        )
+        self.margin_plot.setMouseEnabled(x=False, y=False)
+        self.margin_plot.setMenuEnabled(False)
+        self.margin_plot.getPlotItem().getViewBox().setBorder(pg.mkPen("#606060", width=1))
+        margin_bottom_axis = self.margin_plot.getAxis("bottom")
+        margin_left_axis = self.margin_plot.getAxis("left")
+        for axis in (margin_bottom_axis, margin_left_axis):
+            axis.setPen(pg.mkPen("#808080"))
+            axis.setTextPen(pg.mkPen("#b8c3d1"))
+            axis.setStyle(
+                tickFont=self.app_font,
+                tickTextOffset=6,
+                autoExpandTextSpace=True,
+            )
+        margin_bottom_axis.setHeight(PLOT_BOTTOM_AXIS_HEIGHT_PX)
+        margin_left_axis.setWidth(MARGIN_LEFT_AXIS_WIDTH_PX)
 
         self.draw()
-        QtCore.QTimer.singleShot(0, self.align_control_panel)
+
+    def axis_label_style(self) -> dict[str, str]:
+        return {
+            "color": "#b8c3d1",
+            "font-size": f"{APP_FONT_SIZE_PT}pt",
+            "font-family": self.font_family,
+        }
 
     def create_control_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
-        panel.setFixedWidth(190)
         panel.setStyleSheet(
-            """
-            QLabel {
+            f"""
+            QLabel {{
                 color: #b8c3d1;
-                font-family: Meiryo;
-                font-size: 9pt;
-            }
-            QLineEdit {
+                font-family: "{self.font_family}";
+                font-size: {APP_FONT_SIZE_PT}pt;
+            }}
+            QLineEdit {{
                 background: #555555;
                 border: 1px solid #606060;
                 color: #f1f5f9;
-                font-family: Meiryo;
-                font-size: 9pt;
+                font-family: "{self.font_family}";
+                font-size: {APP_FONT_SIZE_PT}pt;
                 padding: 2px 6px;
                 selection-background-color: #1f6feb;
-            }
-            QLabel#result {
+            }}
+            QComboBox {{
+                background: #555555;
+                border: 1px solid #606060;
+                color: #f1f5f9;
+                font-family: "{self.font_family}";
+                font-size: {APP_FONT_SIZE_PT}pt;
+                padding: 2px 6px;
+                selection-background-color: #1f6feb;
+            }}
+            QLabel#result {{
                 color: #b8c3d1;
-            }
+            }}
             """
         )
         self.control_panel = panel
+        layout = QtWidgets.QHBoxLayout(panel)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.setSpacing(12)
 
-        self.pl_clk1_delay_edit = self.create_delay_edit("0")
         self.frequency_label = QtWidgets.QLabel()
         self.frequency_label.setObjectName("result")
         self.update_frequency_label()
-        self.dig_delta_labels: dict[str, QtWidgets.QLabel] = {}
+        self.pl_clk1_delay_combo = self.create_delay_combo()
+        self.control_widgets_by_row: dict[str, QtWidgets.QWidget] = {}
 
-        self.control_widgets_by_row = {
-            self.pl_dcdc_clk_name: self.create_clock_editor(parent=panel),
-            self.power_net_name_0: self.create_dig_timing_editor(parent=panel),
-        }
+        layout.addWidget(self.create_clock_editor(parent=panel))
+        layout.addStretch(1)
         return panel
-
-    def create_dig_timing_editor(self, parent: QtWidgets.QWidget) -> QtWidgets.QWidget:
-        editor = QtWidgets.QWidget(parent)
-        layout = QtWidgets.QGridLayout(editor)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(4)
-        layout.setVerticalSpacing(2)
-
-        title = QtWidgets.QLabel("from CDS↓")
-        title.setObjectName("result")
-        layout.addWidget(title, 0, 0, 1, 2)
-
-        rows = [
-            ("cds1_rise", "CDS1→↑"),
-            ("cds1_fall", "CDS1→↓"),
-            ("cds2_rise", "CDS2→↑"),
-            ("cds2_fall", "CDS2→↓"),
-        ]
-        for row_index, (key, label_text) in enumerate(rows, start=1):
-            label = QtWidgets.QLabel(label_text)
-            value = QtWidgets.QLabel()
-            value.setObjectName("result")
-            value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
-            self.dig_delta_labels[key] = value
-            layout.addWidget(label, row_index, 0)
-            layout.addWidget(value, row_index, 1)
-
-        editor.adjustSize()
-        return editor
 
     def create_clock_editor(self, parent: QtWidgets.QWidget) -> QtWidgets.QWidget:
         editor = QtWidgets.QWidget(parent)
-        layout = QtWidgets.QGridLayout(editor)
+        layout = QtWidgets.QHBoxLayout(editor)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(6)
-        layout.setVerticalSpacing(8)
+        layout.setSpacing(10)
 
-        freq_label = QtWidgets.QLabel("freq")
-        delay_label = QtWidgets.QLabel("delay ns")
-        layout.addWidget(freq_label, 0, 0)
-        layout.addWidget(self.frequency_label, 0, 1)
-        layout.addWidget(delay_label, 1, 0)
-        layout.addWidget(self.pl_clk1_delay_edit, 1, 1)
+        status_label = QtWidgets.QLabel(f"{self.pl_dcdc_clk_name}: delay [ns]")
+        layout.addWidget(status_label)
+        layout.addWidget(self.pl_clk1_delay_combo)
         editor.adjustSize()
         return editor
 
-    def create_delay_edit(self, text: str) -> QtWidgets.QLineEdit:
-        edit = QtWidgets.QLineEdit(text)
-        edit.setFixedWidth(64)
-        edit.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        validator = QtGui.QDoubleValidator(0.0, self.gate_period_us / US_PER_NS, 6, edit)
-        validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
-        edit.setValidator(validator)
-        edit.editingFinished.connect(self.apply_inputs)
-        return edit
+    def create_margin_legend(self) -> QtWidgets.QWidget:
+        legend = QtWidgets.QWidget()
+        legend.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        layout = QtWidgets.QHBoxLayout(legend)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.setSpacing(18)
+
+        entries = [
+            ("△", "CDS1↓ to SW↑", "#58a6ff"),
+            ("▽", "CDS1↓ to SW↓", "#58a6ff"),
+            ("▲", "CDS2↓ to SW↑", "#f0883e"),
+            ("▼", "CDS2↓ to SW↓", "#f0883e"),
+        ]
+        for marker, text, color in entries:
+            label = QtWidgets.QLabel(f"{marker} {text}")
+            label.setStyleSheet(
+                f'color: {color}; font-family: "{self.font_family}"; '
+                f"font-size: {APP_FONT_SIZE_PT}pt;"
+            )
+            layout.addWidget(label)
+        layout.insertStretch(0, 1)
+        layout.addStretch(1)
+        return legend
+
+    def create_delay_combo(self) -> QtWidgets.QComboBox:
+        combo = QtWidgets.QComboBox()
+        combo.setFixedWidth(86)
+        source_period_ns = 1000.0 / self.source_clock_mhz
+        step = 0
+        while True:
+            delay_ns = step * source_period_ns
+            if delay_ns > MAX_PL_DELAY_NS + 1e-9:
+                break
+            combo.addItem(f"{delay_ns:.1f}", delay_ns)
+            step += 1
+        combo.currentIndexChanged.connect(self.apply_inputs)
+        return combo
+
+    @staticmethod
+    def triangle_symbol(up: bool) -> QtGui.QPainterPath:
+        path = QtGui.QPainterPath()
+        if up:
+            points = [
+                QtCore.QPointF(0.0, -0.55),
+                QtCore.QPointF(0.55, 0.55),
+                QtCore.QPointF(-0.55, 0.55),
+            ]
+        else:
+            points = [
+                QtCore.QPointF(0.0, 0.55),
+                QtCore.QPointF(0.55, -0.55),
+                QtCore.QPointF(-0.55, -0.55),
+            ]
+        path.moveTo(points[0])
+        path.lineTo(points[1])
+        path.lineTo(points[2])
+        path.closeSubpath()
+        return path
 
     def draw(self) -> None:
         previous_x_range: list[float] | None = None
@@ -433,7 +569,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
                 dig_x = [0.0, dig_start_us] + dig_x
                 dig_y = [dig_base - half_amp, dig_base - half_amp] + dig_y
             self.plot.plot(dig_x, dig_y, pen=waveform_pen)
-        self.update_dig_delta_labels(clock_period_us)
+        self.draw_margin_plot(clock_period_us)
 
         self.add_time_markers(
             [0, self.cds1_end_us, self.cds2_end_us, self.gate_period_us],
@@ -450,7 +586,101 @@ class TimingDiagram(QtWidgets.QMainWindow):
         else:
             self.plot.setXRange(previous_x_range[0], previous_x_range[1], padding=0)
             self.plot.setYRange(previous_y_range[0], previous_y_range[1], padding=0)
-        QtCore.QTimer.singleShot(0, self.align_control_panel)
+
+    def draw_margin_plot(self, clock_period_us: float) -> None:
+        self.margin_plot.clear()
+        self.margin_plot.getAxis("bottom").setTicks(
+            [
+                [
+                    (index, shorten_tick_label(name))
+                    for index, name in enumerate(self.power_net_names)
+                ]
+            ]
+        )
+        self.margin_plot.setXRange(-0.5, len(self.power_net_names) - 0.5, padding=0)
+        self.margin_plot.setYRange(
+            -POWER_MARGIN_RANGE_NS,
+            POWER_MARGIN_RANGE_NS,
+            padding=0,
+        )
+
+        self.margin_plot.addItem(
+            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#d0d7de", width=2))
+        )
+        for value_ns in (-POWER_MARGIN_RANGE_NS, POWER_MARGIN_RANGE_NS):
+            self.margin_plot.addItem(
+                pg.InfiniteLine(
+                    pos=value_ns,
+                    angle=0,
+                    pen=pg.mkPen("#8a8a8a", width=1, style=QtCore.Qt.PenStyle.DashLine),
+                )
+            )
+
+        deltas = self.calculate_power_edge_deltas_ns(clock_period_us)
+        series = [
+            ("cds1_rise", -0.18, self.triangle_symbol(up=True), "#58a6ff", None),
+            ("cds1_fall", -0.06, self.triangle_symbol(up=False), "#58a6ff", None),
+            (
+                "cds2_rise",
+                0.06,
+                self.triangle_symbol(up=True),
+                "#f0883e",
+                "#f0883e",
+            ),
+            (
+                "cds2_fall",
+                0.18,
+                self.triangle_symbol(up=False),
+                "#f0883e",
+                "#f0883e",
+            ),
+        ]
+        for key, x_offset, symbol, color, brush_color in series:
+            x_values = [index + x_offset for index in range(len(deltas))]
+            y_values = [entry[key] for entry in deltas]
+            self.margin_plot.plot(
+                x_values,
+                y_values,
+                pen=None,
+                symbol=symbol,
+                symbolSize=9,
+                symbolPen=pg.mkPen(color, width=1.5),
+                symbolBrush=pg.mkBrush(brush_color) if brush_color else None,
+            )
+
+    def calculate_power_edge_deltas_ns(
+        self,
+        clock_period_us: float,
+    ) -> list[dict[str, float]]:
+        deltas: list[dict[str, float]] = []
+        for power_net_delay_ns in self.power_net_delays_ns:
+            rise_start_us = (self.pl_clk1_delay_ns + power_net_delay_ns) * US_PER_NS
+            fall_start_us = rise_start_us + clock_period_us * 0.5
+            deltas.append(
+                {
+                    "cds1_rise": self.nearest_clock_edge_delta_ns(
+                        self.cds1_end_us,
+                        rise_start_us,
+                        clock_period_us,
+                    ),
+                    "cds1_fall": self.nearest_clock_edge_delta_ns(
+                        self.cds1_end_us,
+                        fall_start_us,
+                        clock_period_us,
+                    ),
+                    "cds2_rise": self.nearest_clock_edge_delta_ns(
+                        self.cds2_end_us,
+                        rise_start_us,
+                        clock_period_us,
+                    ),
+                    "cds2_fall": self.nearest_clock_edge_delta_ns(
+                        self.cds2_end_us,
+                        fall_start_us,
+                        clock_period_us,
+                    ),
+                }
+            )
+        return deltas
 
     def align_control_panel(self) -> None:
         if not self.baselines:
@@ -476,41 +706,9 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.plot.addItem(line)
 
             text = pg.TextItem(f"{value_us:g} us", color="#b8c3d1", anchor=(0.5, 0))
-            text.setFont(QtGui.QFont("Meiryo", 9))
+            text.setFont(self.app_font)
             text.setPos(value_us, -0.66)
             self.plot.addItem(text)
-
-    def update_dig_delta_labels(self, clock_period_us: float) -> None:
-        dig_rise_start_us = (
-            self.pl_clk1_delay_ns + self.power_net_delays_ns[0]
-        ) * US_PER_NS
-        dig_fall_start_us = dig_rise_start_us + clock_period_us * 0.5
-
-        values = {
-            "cds1_rise": self.nearest_clock_edge_delta_ns(
-                self.cds1_end_us,
-                dig_rise_start_us,
-                clock_period_us,
-            ),
-            "cds1_fall": self.nearest_clock_edge_delta_ns(
-                self.cds1_end_us,
-                dig_fall_start_us,
-                clock_period_us,
-            ),
-            "cds2_rise": self.nearest_clock_edge_delta_ns(
-                self.cds2_end_us,
-                dig_rise_start_us,
-                clock_period_us,
-            ),
-            "cds2_fall": self.nearest_clock_edge_delta_ns(
-                self.cds2_end_us,
-                dig_fall_start_us,
-                clock_period_us,
-            ),
-        }
-
-        for key, delta_ns in values.items():
-            self.dig_delta_labels[key].setText(f"{delta_ns:+.1f} ns")
 
     def nearest_clock_edge_delta_ns(
         self,
@@ -539,22 +737,14 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.draw()
 
     def parse_delay_edit(self) -> float | None:
-        text = self.pl_clk1_delay_edit.text().strip()
-        try:
-            delay_ns = float(text)
-        except ValueError:
-            self.pl_clk1_delay_edit.setText(f"{self.pl_clk1_delay_ns:g}")
+        delay_ns = self.pl_clk1_delay_combo.currentData()
+        if delay_ns is None:
             return None
-
-        if delay_ns < 0.0 or delay_ns > self.gate_period_us / US_PER_NS:
-            self.pl_clk1_delay_edit.setText(f"{self.pl_clk1_delay_ns:g}")
-            return None
-
-        return delay_ns
+        return float(delay_ns)
 
     def update_frequency_label(self) -> None:
         frequency_mhz = self.source_clock_mhz / self.clock_divider
-        self.frequency_label.setText(f"{frequency_mhz:.2f} MHz")
+        self.frequency_label.setText(f"{frequency_mhz:.2f} [MHz]")
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
