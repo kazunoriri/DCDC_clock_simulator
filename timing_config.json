@@ -1,5 +1,6 @@
 {
   "pl_dcdc_clk_name": "PL_DCDC_CLK1",
+  "pl_dcdc_clk_delay_ns": 17.1,
   "power_net_name_0": "3.3V_DIG",
   "power_net_name_1": "3.3V_DIG_2",
   "power_net_name_2": "3.3V_DIG_3",

@@ -27,6 +27,7 @@ MAX_POWER_TICK_LABEL_CHARS = 12
 CONFIG_PATH = Path(__file__).with_name("timing_config_debug.json")
 CONFIG_REQUIRED_KEYS = [
     "pl_dcdc_clk_name",
+    "pl_dcdc_clk_delay_ns",
     "gate_period_us",
     "cds1_rise_us",
     "cds1_fall_us",
@@ -122,6 +123,7 @@ class PowerNet:
 @dataclass(frozen=True)
 class TimingConfig:
     pl_dcdc_clk_name: str = "PL_DCDC_CLK1"
+    pl_dcdc_clk_delay_ns: float = 0.0
     power_net_name_0: str = "3.3V_DIG"
     power_net_name_1: str = "3.3V_DIG_2"
     power_net_name_2: str = "3.3V_DIG_3"
@@ -226,9 +228,15 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         clock_divider, error = parse_required_int("clock_divider", minimum=1)
         if error:
             return None, error
+        pl_dcdc_clk_delay_ns, error = parse_required_float("pl_dcdc_clk_delay_ns")
+        if error:
+            return None, error
+        if pl_dcdc_clk_delay_ns < 0.0 or pl_dcdc_clk_delay_ns > MAX_PL_DELAY_NS:
+            return None, f"pl_dcdc_clk_delay_ns must be between 0 and {MAX_PL_DELAY_NS:g}."
 
         values = {
             "pl_dcdc_clk_name": parse_str("pl_dcdc_clk_name"),
+            "pl_dcdc_clk_delay_ns": pl_dcdc_clk_delay_ns,
             "gate_period_us": gate_period_us,
             "cds1_rise_us": cds1_rise_us,
             "cds1_fall_us": cds1_fall_us,
@@ -533,6 +541,9 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.config = config
         self.has_timing_config = config is not None
         active_config = config or TimingConfig()
+        self.pl_clk1_delay_ns = (
+            active_config.pl_dcdc_clk_delay_ns if self.has_timing_config else 0.0
+        )
         self.gate_period_us = active_config.gate_period_us
         self.x_max_us = self.gate_period_us + 2.0
         self.pl_dcdc_clk_name = active_config.pl_dcdc_clk_name
@@ -580,6 +591,9 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.cds2_start_us = active_config.cds2_rise_us
         self.cds2_end_us = active_config.cds2_fall_us
         self.pl_delay_candidates_ns = self.create_pl_delay_candidates_ns()
+        self.pl_clk1_delay_ns = self.nearest_pl_delay_candidate_ns(
+            self.pl_clk1_delay_ns
+        )
         self.row_names = (
             [
                 "CDS1",
@@ -736,9 +750,31 @@ class TimingDiagram(QtWidgets.QMainWindow):
         combo.setFixedWidth(86)
         for delay_ns in self.pl_delay_candidates_ns:
             combo.addItem(f"{delay_ns:.1f}", delay_ns)
+        self.select_nearest_delay_combo_index(combo, self.pl_clk1_delay_ns)
         combo.setEnabled(self.has_timing_config)
         combo.currentIndexChanged.connect(self.apply_inputs)
         return combo
+
+    def nearest_pl_delay_candidate_ns(self, delay_ns: float) -> float:
+        if not self.pl_delay_candidates_ns:
+            return delay_ns
+        return min(
+            self.pl_delay_candidates_ns,
+            key=lambda candidate_ns: abs(candidate_ns - delay_ns),
+        )
+
+    def select_nearest_delay_combo_index(
+        self,
+        combo: QtWidgets.QComboBox,
+        delay_ns: float,
+    ) -> None:
+        if combo.count() == 0:
+            return
+        best_index = min(
+            range(combo.count()),
+            key=lambda index: abs(float(combo.itemData(index)) - delay_ns),
+        )
+        combo.setCurrentIndex(best_index)
 
     @staticmethod
     def triangle_symbol(up: bool) -> QtGui.QPainterPath:
@@ -1132,6 +1168,10 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.pl_clk1_delay_combo.clear()
             for delay_ns in self.pl_delay_candidates_ns:
                 self.pl_clk1_delay_combo.addItem(f"{delay_ns:.1f}", delay_ns)
+            self.select_nearest_delay_combo_index(
+                self.pl_clk1_delay_combo,
+                self.pl_clk1_delay_ns,
+            )
             self.pl_clk1_delay_combo.blockSignals(False)
             self.pl_clk1_delay_combo.setEnabled(self.has_timing_config)
         if hasattr(self, "delay_sweep_plot"):
@@ -1152,7 +1192,6 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.show_config_error("Config error", f"{path.name}: file not found.")
             return False
 
-        self.pl_clk1_delay_ns = 0.0
         self.configure_from_config(config)
         self.refresh_config_widgets()
         self.draw()

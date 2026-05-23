@@ -20,6 +20,7 @@ Configuration JSON:
 ```json
 {
   "pl_dcdc_clk_name": "PL_DCDC_CLK1",
+  "pl_dcdc_clk_delay_ns": 0.0,
   "power_net_name_0": "3.3V_DIG",
   "power_net_name_1": "3.3V_DIG_2",
   "power_net_name_2": "3.3V_DIG_3",
@@ -53,6 +54,7 @@ Current timing assumptions:
 - Signal names, gate period, CDS timing, and divider are loaded from JSON
 - Display range: 0 us to `gate_period_us`
 - PL_DCDC_CLK1: 175 MHz divided clock, 50% duty
+- `pl_dcdc_clk_delay_ns` is the initial PL_DCDC_CLK1 delay in ns
 - `power_net_delay_ns_*` values are ns delays from PL_DCDC_CLK1
 - `power_net_duty_percent_*` values are power net waveform duty percentages
 - Power nets are not plotted when their name is blank, or delay/duty is missing or invalid
