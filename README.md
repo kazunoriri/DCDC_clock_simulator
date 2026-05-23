@@ -9,7 +9,13 @@ Run:
 uv run python main.py
 ```
 
-Configuration:
+Startup configuration:
+
+- At startup, `timing_config_debug.json` is loaded when it exists.
+- When `timing_config_debug.json` does not exist, the app starts with empty plots.
+- Any `.json` file name can be loaded by dragging and dropping it onto the window.
+
+Configuration JSON:
 
 ```json
 {
@@ -44,7 +50,7 @@ Configuration:
 Current timing assumptions:
 
 - Main horizontal axis: us
-- Signal names, gate period, CDS timing, and divider are loaded from `timing_config.json`
+- Signal names, gate period, CDS timing, and divider are loaded from JSON
 - Display range: 0 us to `gate_period_us`
 - PL_DCDC_CLK1: 175 MHz divided clock, 50% duty
 - `power_net_delay_ns_*` values are ns delays from PL_DCDC_CLK1

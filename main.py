@@ -24,7 +24,19 @@ TIMING_LEFT_AXIS_WIDTH_PX = 120
 MARGIN_LEFT_AXIS_WIDTH_PX = 75
 SWEEP_LEFT_AXIS_WIDTH_PX = 75
 MAX_POWER_TICK_LABEL_CHARS = 12
-CONFIG_PATH = Path(__file__).with_name("timing_config.json")
+CONFIG_PATH = Path(__file__).with_name("timing_config_debug.json")
+CONFIG_REQUIRED_KEYS = [
+    "pl_dcdc_clk_name",
+    "gate_period_us",
+    "cds1_rise_us",
+    "cds1_fall_us",
+    "cds2_rise_us",
+    "cds2_fall_us",
+    "clock_divider",
+    *[f"power_net_name_{index}" for index in range(6)],
+    *[f"power_net_delay_ns_{index}" for index in range(6)],
+    *[f"power_net_duty_percent_{index}" for index in range(6)],
+]
 
 
 @dataclass(frozen=True)
@@ -136,26 +148,32 @@ class TimingConfig:
     clock_divider: int = 84
 
 
-def load_timing_config(path: Path | None = None) -> TimingConfig:
+def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, str | None]:
     if path is None:
         path = CONFIG_PATH
 
-    defaults = TimingConfig()
     if not path.exists():
-        return defaults
+        return None, None
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return defaults
+    except OSError as exc:
+        return None, f"JSON file could not be read: {exc}"
+    except json.JSONDecodeError as exc:
+        return None, f"JSON parse error: {exc}"
 
-    def parse_str(key: str, default: str) -> str:
-        value = data.get(key, default)
+    if not isinstance(data, dict):
+        return None, "JSON root must be an object."
+
+    missing_keys = [key for key in CONFIG_REQUIRED_KEYS if key not in data]
+    if missing_keys:
+        return None, "Missing required parameter(s): " + ", ".join(missing_keys)
+
+    def parse_str(key: str) -> str:
+        value = data.get(key)
         return str(value) if value is not None else ""
 
     def parse_positive_float(key: str) -> float | None:
-        if key not in data:
-            return None
         try:
             value = float(data[key])
         except (TypeError, ValueError):
@@ -163,53 +181,80 @@ def load_timing_config(path: Path | None = None) -> TimingConfig:
         return value if math.isfinite(value) and value >= 0.0 else None
 
     def parse_duty_percent(key: str) -> float | None:
-        if key not in data:
-            return None
         try:
             value = float(data[key])
         except (TypeError, ValueError):
             return None
         return value if math.isfinite(value) and 0.0 < value <= 100.0 else None
 
+    def parse_required_float(key: str, *, positive: bool = False) -> tuple[float, str | None]:
+        try:
+            value = float(data[key])
+        except (TypeError, ValueError):
+            return 0.0, f"{key} must be a number."
+        if not math.isfinite(value):
+            return 0.0, f"{key} must be finite."
+        if positive and value <= 0.0:
+            return 0.0, f"{key} must be greater than 0."
+        return value, None
+
+    def parse_required_int(key: str, *, minimum: int) -> tuple[int, str | None]:
+        try:
+            value = int(data[key])
+        except (TypeError, ValueError):
+            return 0, f"{key} must be an integer."
+        if value < minimum:
+            return 0, f"{key} must be >= {minimum}."
+        return value, None
+
     try:
+        gate_period_us, error = parse_required_float("gate_period_us", positive=True)
+        if error:
+            return None, error
+        cds1_rise_us, error = parse_required_float("cds1_rise_us")
+        if error:
+            return None, error
+        cds1_fall_us, error = parse_required_float("cds1_fall_us")
+        if error:
+            return None, error
+        cds2_rise_us, error = parse_required_float("cds2_rise_us")
+        if error:
+            return None, error
+        cds2_fall_us, error = parse_required_float("cds2_fall_us")
+        if error:
+            return None, error
+        clock_divider, error = parse_required_int("clock_divider", minimum=1)
+        if error:
+            return None, error
+
         values = {
-            "pl_dcdc_clk_name": parse_str(
-                "pl_dcdc_clk_name", defaults.pl_dcdc_clk_name
-            ),
-            "gate_period_us": float(data.get("gate_period_us", defaults.gate_period_us)),
-            "cds1_rise_us": float(data.get("cds1_rise_us", defaults.cds1_rise_us)),
-            "cds1_fall_us": float(data.get("cds1_fall_us", defaults.cds1_fall_us)),
-            "cds2_rise_us": float(data.get("cds2_rise_us", defaults.cds2_rise_us)),
-            "cds2_fall_us": float(data.get("cds2_fall_us", defaults.cds2_fall_us)),
-            "clock_divider": int(data.get("clock_divider", defaults.clock_divider)),
+            "pl_dcdc_clk_name": parse_str("pl_dcdc_clk_name"),
+            "gate_period_us": gate_period_us,
+            "cds1_rise_us": cds1_rise_us,
+            "cds1_fall_us": cds1_fall_us,
+            "cds2_rise_us": cds2_rise_us,
+            "cds2_fall_us": cds2_fall_us,
+            "clock_divider": clock_divider,
         }
         for index in range(6):
-            values[f"power_net_name_{index}"] = parse_str(
-                f"power_net_name_{index}", getattr(defaults, f"power_net_name_{index}")
-            )
+            values[f"power_net_name_{index}"] = parse_str(f"power_net_name_{index}")
             values[f"power_net_delay_ns_{index}"] = parse_positive_float(
                 f"power_net_delay_ns_{index}"
             )
             values[f"power_net_duty_percent_{index}"] = parse_duty_percent(
                 f"power_net_duty_percent_{index}"
             )
-    except (TypeError, ValueError):
-        return defaults
+    except (TypeError, ValueError) as exc:
+        return None, f"Configuration error: {exc}"
 
     if not values["pl_dcdc_clk_name"].strip():
-        values["pl_dcdc_clk_name"] = defaults.pl_dcdc_clk_name
-    if values["gate_period_us"] <= 0.0:
-        values["gate_period_us"] = defaults.gate_period_us
+        return None, "pl_dcdc_clk_name must not be blank."
     if values["cds1_rise_us"] >= values["cds1_fall_us"]:
-        values["cds1_rise_us"] = defaults.cds1_rise_us
-        values["cds1_fall_us"] = defaults.cds1_fall_us
+        return None, "cds1_rise_us must be less than cds1_fall_us."
     if values["cds2_rise_us"] >= values["cds2_fall_us"]:
-        values["cds2_rise_us"] = defaults.cds2_rise_us
-        values["cds2_fall_us"] = defaults.cds2_fall_us
-    if values["clock_divider"] < 1:
-        values["clock_divider"] = defaults.clock_divider
+        return None, "cds2_rise_us must be less than cds2_fall_us."
 
-    return TimingConfig(**values)
+    return TimingConfig(**values), None
 
 
 def get_preferred_font_family() -> str:
@@ -319,67 +364,23 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.resize(1760, 720)
         if not self.export_mode:
             self.move(0, 0)
+            self.setAcceptDrops(True)
 
         self.x_min_us = -2.0
         self.row_gap = 1.05
         self.amplitude = 0.74
         self.source_clock_mhz = 175.0
-        self.config = load_timing_config()
-        self.gate_period_us = self.config.gate_period_us
-        self.x_max_us = self.gate_period_us + 2.0
-        self.pl_dcdc_clk_name = self.config.pl_dcdc_clk_name
-        power_net_names = [
-            self.config.power_net_name_0,
-            self.config.power_net_name_1,
-            self.config.power_net_name_2,
-            self.config.power_net_name_3,
-            self.config.power_net_name_4,
-            self.config.power_net_name_5,
-        ]
-        power_net_delays_ns = [
-            self.config.power_net_delay_ns_0,
-            self.config.power_net_delay_ns_1,
-            self.config.power_net_delay_ns_2,
-            self.config.power_net_delay_ns_3,
-            self.config.power_net_delay_ns_4,
-            self.config.power_net_delay_ns_5,
-        ]
-        power_net_duty_percents = [
-            self.config.power_net_duty_percent_0,
-            self.config.power_net_duty_percent_1,
-            self.config.power_net_duty_percent_2,
-            self.config.power_net_duty_percent_3,
-            self.config.power_net_duty_percent_4,
-            self.config.power_net_duty_percent_5,
-        ]
-        self.power_nets = [
-            PowerNet(name.strip(), delay_ns, duty_percent)
-            for name, delay_ns, duty_percent in zip(
-                power_net_names,
-                power_net_delays_ns,
-                power_net_duty_percents,
-                strict=True,
-            )
-            if name.strip() and delay_ns is not None and duty_percent is not None
-        ]
-        self.power_net_names = [power_net.name for power_net in self.power_nets]
-        self.power_net_name_0 = self.power_net_names[0] if self.power_net_names else ""
-        self.clock_divider = self.config.clock_divider
         self.pl_clk1_delay_ns = 0.0
-        self.cds1_start_us = self.config.cds1_rise_us
-        self.cds1_end_us = self.config.cds1_fall_us
-        self.cds2_start_us = self.config.cds2_rise_us
-        self.cds2_end_us = self.config.cds2_fall_us
+        self.config: TimingConfig | None = None
+        self.has_timing_config = False
+        startup_config, startup_error = load_timing_config()
+        self.configure_from_config(startup_config)
+        self.startup_error = startup_error
         self.font_family = get_preferred_font_family()
         self.app_font = QtGui.QFont(self.font_family, APP_FONT_SIZE_PT)
-        self.pl_delay_candidates_ns = self.create_pl_delay_candidates_ns()
-        self.row_names = [
-            "CDS1",
-            "CDS2",
-            self.pl_dcdc_clk_name,
-            *self.power_net_names,
-        ]
         self.baselines: dict[str, float] = {}
+        self.pl_delay_status_label: QtWidgets.QLabel | None = None
+        self.copy_image_button: QtWidgets.QPushButton | None = None
 
         pg.setConfigOptions(antialias=True)
 
@@ -519,6 +520,76 @@ class TimingDiagram(QtWidgets.QMainWindow):
         sweep_left_axis.setWidth(SWEEP_LEFT_AXIS_WIDTH_PX)
 
         self.draw()
+        if self.startup_error and not self.export_mode:
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self.show_config_error(
+                    "Config error",
+                    f"{CONFIG_PATH.name}: {self.startup_error}",
+                ),
+            )
+
+    def configure_from_config(self, config: TimingConfig | None) -> None:
+        self.config = config
+        self.has_timing_config = config is not None
+        active_config = config or TimingConfig()
+        self.gate_period_us = active_config.gate_period_us
+        self.x_max_us = self.gate_period_us + 2.0
+        self.pl_dcdc_clk_name = active_config.pl_dcdc_clk_name
+        power_net_names = [
+            active_config.power_net_name_0,
+            active_config.power_net_name_1,
+            active_config.power_net_name_2,
+            active_config.power_net_name_3,
+            active_config.power_net_name_4,
+            active_config.power_net_name_5,
+        ]
+        power_net_delays_ns = [
+            active_config.power_net_delay_ns_0,
+            active_config.power_net_delay_ns_1,
+            active_config.power_net_delay_ns_2,
+            active_config.power_net_delay_ns_3,
+            active_config.power_net_delay_ns_4,
+            active_config.power_net_delay_ns_5,
+        ]
+        power_net_duty_percents = [
+            active_config.power_net_duty_percent_0,
+            active_config.power_net_duty_percent_1,
+            active_config.power_net_duty_percent_2,
+            active_config.power_net_duty_percent_3,
+            active_config.power_net_duty_percent_4,
+            active_config.power_net_duty_percent_5,
+        ]
+        self.power_nets = [
+            PowerNet(name.strip(), delay_ns, duty_percent)
+            for name, delay_ns, duty_percent in zip(
+                power_net_names,
+                power_net_delays_ns,
+                power_net_duty_percents,
+                strict=True,
+            )
+            if name.strip() and delay_ns is not None and duty_percent is not None
+        ]
+        if not self.has_timing_config:
+            self.power_nets = []
+        self.power_net_names = [power_net.name for power_net in self.power_nets]
+        self.power_net_name_0 = self.power_net_names[0] if self.power_net_names else ""
+        self.clock_divider = active_config.clock_divider
+        self.cds1_start_us = active_config.cds1_rise_us
+        self.cds1_end_us = active_config.cds1_fall_us
+        self.cds2_start_us = active_config.cds2_rise_us
+        self.cds2_end_us = active_config.cds2_fall_us
+        self.pl_delay_candidates_ns = self.create_pl_delay_candidates_ns()
+        self.row_names = (
+            [
+                "CDS1",
+                "CDS2",
+                self.pl_dcdc_clk_name,
+                *self.power_net_names,
+            ]
+            if self.has_timing_config
+            else []
+        )
 
     def axis_label_style(self) -> dict[str, str]:
         return {
@@ -581,8 +652,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        status_label = QtWidgets.QLabel(f"{self.pl_dcdc_clk_name}: delay [ns]")
-        layout.addWidget(status_label)
+        self.pl_delay_status_label = QtWidgets.QLabel(self.delay_status_text())
+        layout.addWidget(self.pl_delay_status_label)
         layout.addWidget(self.pl_clk1_delay_combo)
         editor.adjustSize()
         return editor
@@ -665,6 +736,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         combo.setFixedWidth(86)
         for delay_ns in self.pl_delay_candidates_ns:
             combo.addItem(f"{delay_ns:.1f}", delay_ns)
+        combo.setEnabled(self.has_timing_config)
         combo.currentIndexChanged.connect(self.apply_inputs)
         return combo
 
@@ -696,6 +768,9 @@ class TimingDiagram(QtWidgets.QMainWindow):
             previous_x_range, previous_y_range = self.plot.viewRange()
 
         self.plot.clear()
+        if not self.has_timing_config:
+            self.draw_empty_plots()
+            return
 
         signals = [
             PulseSignal("CDS1", ((self.cds1_start_us, self.cds1_end_us),)),
@@ -780,6 +855,21 @@ class TimingDiagram(QtWidgets.QMainWindow):
         else:
             self.plot.setXRange(previous_x_range[0], previous_x_range[1], padding=0)
             self.plot.setYRange(previous_y_range[0], previous_y_range[1], padding=0)
+
+    def draw_empty_plots(self) -> None:
+        self.baselines = {}
+        self.plot.getAxis("left").setTicks([[]])
+        self.plot.setXRange(0.0, 1.0, padding=0)
+        self.plot.setYRange(0.0, 1.0, padding=0)
+
+        self.margin_plot.clear()
+        self.margin_plot.getAxis("bottom").setTicks([[]])
+        self.margin_plot.setXRange(0.0, 1.0, padding=0)
+        self.margin_plot.setYRange(0.0, 1.0, padding=0)
+
+        self.delay_sweep_plot.clear()
+        self.delay_sweep_plot.setXRange(0.0, 1.0, padding=0)
+        self.delay_sweep_plot.setYRange(0.0, 1.0, padding=0)
 
     def draw_margin_plot(self, clock_period_us: float) -> None:
         self.margin_plot.clear()
@@ -1023,12 +1113,81 @@ class TimingDiagram(QtWidgets.QMainWindow):
         return (nearest_edge_us - target_us) / US_PER_NS
 
     def apply_inputs(self) -> None:
+        if not self.has_timing_config:
+            return
         pl_clk1_delay_ns = self.parse_delay_edit()
         if pl_clk1_delay_ns is None:
             return
 
         self.pl_clk1_delay_ns = pl_clk1_delay_ns
         self.draw()
+
+    def refresh_config_widgets(self) -> None:
+        if hasattr(self, "frequency_label"):
+            self.update_frequency_label()
+        if self.pl_delay_status_label is not None:
+            self.pl_delay_status_label.setText(self.delay_status_text())
+        if hasattr(self, "pl_clk1_delay_combo"):
+            self.pl_clk1_delay_combo.blockSignals(True)
+            self.pl_clk1_delay_combo.clear()
+            for delay_ns in self.pl_delay_candidates_ns:
+                self.pl_clk1_delay_combo.addItem(f"{delay_ns:.1f}", delay_ns)
+            self.pl_clk1_delay_combo.blockSignals(False)
+            self.pl_clk1_delay_combo.setEnabled(self.has_timing_config)
+        if hasattr(self, "delay_sweep_plot"):
+            self.delay_sweep_plot.setLabel(
+                "bottom",
+                f"{self.pl_dcdc_clk_name} delay [ns]"
+                if self.has_timing_config
+                else "",
+                **self.axis_label_style(),
+            )
+
+    def apply_config_from_path(self, path: Path) -> bool:
+        config, error = load_timing_config(path)
+        if error:
+            self.show_config_error("Config error", f"{path.name}: {error}")
+            return False
+        if config is None:
+            self.show_config_error("Config error", f"{path.name}: file not found.")
+            return False
+
+        self.pl_clk1_delay_ns = 0.0
+        self.configure_from_config(config)
+        self.refresh_config_widgets()
+        self.draw()
+        return True
+
+    def show_config_error(self, title: str, message: str) -> None:
+        if self.export_mode:
+            return
+        QtWidgets.QMessageBox.warning(self, title, message)
+
+    def first_json_drop_path(self, event: QtGui.QDropEvent) -> Path | None:
+        for url in event.mimeData().urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.suffix.lower() == ".json":
+                return path
+        return None
+
+    def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # noqa: N802
+        if self.first_json_drop_path(event) is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QtGui.QDropEvent) -> None:  # noqa: N802
+        path = self.first_json_drop_path(event)
+        if path is None:
+            self.show_config_error("Config error", "Drop a JSON file.")
+            event.ignore()
+            return
+        if self.apply_config_from_path(path):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def parse_delay_edit(self) -> float | None:
         delay_ns = self.pl_clk1_delay_combo.currentData()
@@ -1037,8 +1196,16 @@ class TimingDiagram(QtWidgets.QMainWindow):
         return float(delay_ns)
 
     def update_frequency_label(self) -> None:
+        if not self.has_timing_config:
+            self.frequency_label.setText("No config loaded")
+            return
         frequency_mhz = self.source_clock_mhz / self.clock_divider
         self.frequency_label.setText(f"{frequency_mhz:.2f} [MHz]")
+
+    def delay_status_text(self) -> str:
+        if not self.has_timing_config:
+            return "Drop JSON config"
+        return f"{self.pl_dcdc_clk_name}: delay [ns]"
 
     def plot_view_ranges(self) -> dict[str, tuple[list[float], list[float]]]:
         return {
@@ -1068,6 +1235,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
                 True,
             )
             copy_window.resize(self.size())
+            copy_window.configure_from_config(self.config)
+            copy_window.refresh_config_widgets()
             copy_window.pl_clk1_delay_combo.setCurrentIndex(
                 self.pl_clk1_delay_combo.currentIndex()
             )
