@@ -209,8 +209,9 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         if parameter is None or not str(parameter).strip():
             continue
         value = value_cell.value if value_cell is not None else None
-        if value_cell is not None:
-            cell_values[value_cell.coordinate] = value
+        coordinate = getattr(value_cell, "coordinate", None)
+        if coordinate is not None:
+            cell_values[coordinate] = value
         raw_data[str(parameter).strip()] = value
     workbook.close()
 

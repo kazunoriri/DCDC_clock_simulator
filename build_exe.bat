@@ -22,11 +22,11 @@ uv run pyinstaller ^
   --windowed ^
   --name "%APP_NAME%" ^
   --icon "icon\dc_icon.ico" ^
-  --add-data "静止画_60us_CLK1.xlsx;." ^
-  --add-data "静止画_60us_CLK2.xlsx;." ^
-  --add-data "静止画_60us_CLK3.xlsx;." ^
-  --add-data "静止画_60us_CLK4.xlsx;." ^
-  --add-data "静止画_60us_CLK5.xlsx;." ^
+  --add-data "シリアル_48us_CLK1.xlsx;." ^
+  --add-data "シリアル_48us_CLK2.xlsx;." ^
+  --add-data "シリアル_48us_CLK3.xlsx;." ^
+  --add-data "シリアル_48us_CLK4.xlsx;." ^
+  --add-data "シリアル_48us_CLK5.xlsx;." ^
   main.py
 
 echo.
