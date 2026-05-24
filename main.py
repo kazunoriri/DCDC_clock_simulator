@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import openpyxl
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
@@ -24,7 +24,10 @@ TIMING_LEFT_AXIS_WIDTH_PX = 120
 MARGIN_LEFT_AXIS_WIDTH_PX = 75
 SWEEP_LEFT_AXIS_WIDTH_PX = 75
 MAX_POWER_TICK_LABEL_CHARS = 12
-CONFIG_PATH = Path(__file__).with_name("timing_config_debug.json")
+CONFIG_PATH = Path(__file__).with_name("timing_config_debug.xlsx")
+CONFIG_SHEET_NAME = "config"
+CONFIG_PARAMETER_COLUMN = "parameter"
+CONFIG_VALUE_COLUMN = "value"
 CONFIG_REQUIRED_KEYS = [
     "pl_dcdc_clk_name",
     "pl_dcdc_clk_delay_ns",
@@ -158,14 +161,42 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         return None, None
 
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
     except OSError as exc:
-        return None, f"JSON file could not be read: {exc}"
-    except json.JSONDecodeError as exc:
-        return None, f"JSON parse error: {exc}"
+        return None, f"Excel file could not be read: {exc}"
+    except Exception as exc:
+        return None, f"Excel parse error: {exc}"
 
-    if not isinstance(data, dict):
-        return None, "JSON root must be an object."
+    if CONFIG_SHEET_NAME not in workbook.sheetnames:
+        workbook.close()
+        return None, f'Sheet "{CONFIG_SHEET_NAME}" not found.'
+
+    worksheet = workbook[CONFIG_SHEET_NAME]
+    rows = worksheet.iter_rows(values_only=True)
+    try:
+        header = next(rows)
+    except StopIteration:
+        workbook.close()
+        return None, "Excel config sheet is empty."
+
+    normalized_header = [
+        str(value).strip().lower() if value is not None else "" for value in header
+    ]
+    try:
+        parameter_index = normalized_header.index(CONFIG_PARAMETER_COLUMN)
+        value_index = normalized_header.index(CONFIG_VALUE_COLUMN)
+    except ValueError:
+        workbook.close()
+        return None, 'Expected columns: "parameter", "value".'
+
+    data = {}
+    for row in rows:
+        parameter = row[parameter_index] if parameter_index < len(row) else None
+        if parameter is None or not str(parameter).strip():
+            continue
+        value = row[value_index] if value_index < len(row) else None
+        data[str(parameter).strip()] = value
+    workbook.close()
 
     missing_keys = [key for key in CONFIG_REQUIRED_KEYS if key not in data]
     if missing_keys:
@@ -1193,25 +1224,25 @@ class TimingDiagram(QtWidgets.QMainWindow):
             return
         QtWidgets.QMessageBox.warning(self, title, message)
 
-    def first_json_drop_path(self, event: QtGui.QDropEvent) -> Path | None:
+    def first_excel_drop_path(self, event: QtGui.QDropEvent) -> Path | None:
         for url in event.mimeData().urls():
             if not url.isLocalFile():
                 continue
             path = Path(url.toLocalFile())
-            if path.suffix.lower() == ".json":
+            if path.suffix.lower() == ".xlsx":
                 return path
         return None
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # noqa: N802
-        if self.first_json_drop_path(event) is not None:
+        if self.first_excel_drop_path(event) is not None:
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event: QtGui.QDropEvent) -> None:  # noqa: N802
-        path = self.first_json_drop_path(event)
+        path = self.first_excel_drop_path(event)
         if path is None:
-            self.show_config_error("Config error", "Drop a JSON file.")
+            self.show_config_error("Config error", "Drop an Excel file.")
             event.ignore()
             return
         if self.apply_config_from_path(path):
@@ -1234,7 +1265,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
     def delay_status_text(self) -> str:
         if not self.has_timing_config:
-            return "Drop JSON config"
+            return "Drop Excel config"
         return f"{self.pl_dcdc_clk_name}: delay [ns]"
 
     def plot_view_ranges(self) -> dict[str, tuple[list[float], list[float]]]:

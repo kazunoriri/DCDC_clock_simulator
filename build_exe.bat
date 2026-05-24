@@ -22,7 +22,7 @@ uv run pyinstaller ^
   --windowed ^
   --name "%APP_NAME%" ^
   --icon "icon\dc_icon.ico" ^
-  --add-data "timing_config.json;." ^
+  --add-data "timing_config.xlsx;." ^
   main.py
 
 echo.
