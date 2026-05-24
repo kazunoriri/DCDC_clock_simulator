@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,9 @@ CONFIG_PATH = Path(__file__).with_name("timing_config_debug.xlsx")
 CONFIG_SHEET_NAME = "config"
 CONFIG_PARAMETER_COLUMN = "parameter"
 CONFIG_VALUE_COLUMN = "value"
+POWER_NET_COUNT = 8
+TIMING_FIXED_ROW_COUNT = 3 + POWER_NET_COUNT
+EXCEL_CELL_PATTERN = re.compile(r"^[A-Z]+[1-9][0-9]*$")
 CONFIG_REQUIRED_KEYS = [
     "pl_dcdc_clk_name",
     "pl_dcdc_clk_delay_ns",
@@ -36,10 +40,10 @@ CONFIG_REQUIRED_KEYS = [
     "cds1_fall_us",
     "cds2_rise_us",
     "cds2_fall_us",
-    "clock_divider",
-    *[f"power_net_name_{index}" for index in range(6)],
-    *[f"power_net_delay_ns_{index}" for index in range(6)],
-    *[f"power_net_duty_percent_{index}" for index in range(6)],
+    "clock_div_ratio",
+    *[f"power_net_name_{index}" for index in range(POWER_NET_COUNT)],
+    *[f"power_net_delay_ns_{index}" for index in range(POWER_NET_COUNT)],
+    *[f"power_net_duty_percent_{index}" for index in range(POWER_NET_COUNT)],
 ]
 
 
@@ -133,24 +137,30 @@ class TimingConfig:
     power_net_name_3: str = "3.3V_DIG_4"
     power_net_name_4: str = "3.3V_DIG_5"
     power_net_name_5: str = "3.3V_DIG_6"
+    power_net_name_6: str = ""
+    power_net_name_7: str = ""
     power_net_delay_ns_0: float | None = 0.0
     power_net_delay_ns_1: float | None = 10.0
     power_net_delay_ns_2: float | None = 20.0
     power_net_delay_ns_3: float | None = 30.0
     power_net_delay_ns_4: float | None = 40.0
     power_net_delay_ns_5: float | None = 50.0
+    power_net_delay_ns_6: float | None = None
+    power_net_delay_ns_7: float | None = None
     power_net_duty_percent_0: float | None = 35.0
     power_net_duty_percent_1: float | None = 42.5
     power_net_duty_percent_2: float | None = 50.0
     power_net_duty_percent_3: float | None = 57.5
     power_net_duty_percent_4: float | None = 65.0
     power_net_duty_percent_5: float | None = 72.5
+    power_net_duty_percent_6: float | None = None
+    power_net_duty_percent_7: float | None = None
     gate_period_us: float = 60.0
     cds1_rise_us: float = 1.0
     cds1_fall_us: float = 15.0
     cds2_rise_us: float = 30.0
     cds2_fall_us: float = 40.0
-    clock_divider: int = 84
+    clock_div_ratio: int = 84
 
 
 def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, str | None]:
@@ -161,7 +171,7 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         return None, None
 
     try:
-        workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        workbook = openpyxl.load_workbook(path, data_only=False, read_only=True)
     except OSError as exc:
         return None, f"Excel file could not be read: {exc}"
     except Exception as exc:
@@ -172,7 +182,7 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         return None, f'Sheet "{CONFIG_SHEET_NAME}" not found.'
 
     worksheet = workbook[CONFIG_SHEET_NAME]
-    rows = worksheet.iter_rows(values_only=True)
+    rows = worksheet.iter_rows()
     try:
         header = next(rows)
     except StopIteration:
@@ -180,7 +190,8 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         return None, "Excel config sheet is empty."
 
     normalized_header = [
-        str(value).strip().lower() if value is not None else "" for value in header
+        str(cell.value).strip().lower() if cell.value is not None else ""
+        for cell in header
     ]
     try:
         parameter_index = normalized_header.index(CONFIG_PARAMETER_COLUMN)
@@ -189,14 +200,57 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         workbook.close()
         return None, 'Expected columns: "parameter", "value".'
 
-    data = {}
+    cell_values = {}
+    raw_data = {}
     for row in rows:
-        parameter = row[parameter_index] if parameter_index < len(row) else None
+        parameter_cell = row[parameter_index] if parameter_index < len(row) else None
+        value_cell = row[value_index] if value_index < len(row) else None
+        parameter = parameter_cell.value if parameter_cell is not None else None
         if parameter is None or not str(parameter).strip():
             continue
-        value = row[value_index] if value_index < len(row) else None
-        data[str(parameter).strip()] = value
+        value = value_cell.value if value_cell is not None else None
+        if value_cell is not None:
+            cell_values[value_cell.coordinate] = value
+        raw_data[str(parameter).strip()] = value
     workbook.close()
+
+    def evaluate_excel_formula(value: object) -> object:
+        if not isinstance(value, str) or not value.startswith("="):
+            return value
+
+        formula = value.replace(" ", "").upper()
+        delay_match = re.fullmatch(
+            r"=ROUND\(\(1/175\)\*([A-Z]+[1-9][0-9]*)\*10\^3,1\)",
+            formula,
+        )
+        if delay_match:
+            ref = delay_match.group(1)
+            if not EXCEL_CELL_PATTERN.match(ref):
+                return value
+            try:
+                return round((1 / 175) * float(cell_values[ref]) * 10**3, 1)
+            except (KeyError, TypeError, ValueError):
+                return value
+
+        frequency_match = re.fullmatch(
+            r"=ROUND\(175/([A-Z]+[1-9][0-9]*),2\)",
+            formula,
+        )
+        if frequency_match:
+            ref = frequency_match.group(1)
+            if not EXCEL_CELL_PATTERN.match(ref):
+                return value
+            try:
+                return round(175 / float(cell_values[ref]), 2)
+            except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                return value
+
+        return value
+
+    data = {
+        key: evaluate_excel_formula(value)
+        for key, value in raw_data.items()
+    }
 
     missing_keys = [key for key in CONFIG_REQUIRED_KEYS if key not in data]
     if missing_keys:
@@ -256,7 +310,7 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         cds2_fall_us, error = parse_required_float("cds2_fall_us")
         if error:
             return None, error
-        clock_divider, error = parse_required_int("clock_divider", minimum=1)
+        clock_div_ratio, error = parse_required_int("clock_div_ratio", minimum=1)
         if error:
             return None, error
         pl_dcdc_clk_delay_ns, error = parse_required_float("pl_dcdc_clk_delay_ns")
@@ -273,9 +327,9 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
             "cds1_fall_us": cds1_fall_us,
             "cds2_rise_us": cds2_rise_us,
             "cds2_fall_us": cds2_fall_us,
-            "clock_divider": clock_divider,
+            "clock_div_ratio": clock_div_ratio,
         }
-        for index in range(6):
+        for index in range(POWER_NET_COUNT):
             values[f"power_net_name_{index}"] = parse_str(f"power_net_name_{index}")
             values[f"power_net_delay_ns_{index}"] = parse_positive_float(
                 f"power_net_delay_ns_{index}"
@@ -579,28 +633,16 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.x_max_us = self.gate_period_us + 2.0
         self.pl_dcdc_clk_name = active_config.pl_dcdc_clk_name
         power_net_names = [
-            active_config.power_net_name_0,
-            active_config.power_net_name_1,
-            active_config.power_net_name_2,
-            active_config.power_net_name_3,
-            active_config.power_net_name_4,
-            active_config.power_net_name_5,
+            getattr(active_config, f"power_net_name_{index}")
+            for index in range(POWER_NET_COUNT)
         ]
         power_net_delays_ns = [
-            active_config.power_net_delay_ns_0,
-            active_config.power_net_delay_ns_1,
-            active_config.power_net_delay_ns_2,
-            active_config.power_net_delay_ns_3,
-            active_config.power_net_delay_ns_4,
-            active_config.power_net_delay_ns_5,
+            getattr(active_config, f"power_net_delay_ns_{index}")
+            for index in range(POWER_NET_COUNT)
         ]
         power_net_duty_percents = [
-            active_config.power_net_duty_percent_0,
-            active_config.power_net_duty_percent_1,
-            active_config.power_net_duty_percent_2,
-            active_config.power_net_duty_percent_3,
-            active_config.power_net_duty_percent_4,
-            active_config.power_net_duty_percent_5,
+            getattr(active_config, f"power_net_duty_percent_{index}")
+            for index in range(POWER_NET_COUNT)
         ]
         self.power_nets = [
             PowerNet(name.strip(), delay_ns, duty_percent)
@@ -616,7 +658,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
             self.power_nets = []
         self.power_net_names = [power_net.name for power_net in self.power_nets]
         self.power_net_name_0 = self.power_net_names[0] if self.power_net_names else ""
-        self.clock_divider = active_config.clock_divider
+        self.clock_div_ratio = active_config.clock_div_ratio
         self.cds1_start_us = active_config.cds1_rise_us
         self.cds1_end_us = active_config.cds1_fall_us
         self.cds2_start_us = active_config.cds2_rise_us
@@ -852,12 +894,12 @@ class TimingDiagram(QtWidgets.QMainWindow):
         )
 
         baselines = {
-            name: (len(self.row_names) - index - 1) * self.row_gap
+            name: (TIMING_FIXED_ROW_COUNT - index - 1) * self.row_gap
             for index, name in enumerate(self.row_names)
         }
         self.baselines = baselines
         half_amp = self.amplitude * 0.5
-        clock_period_us = self.clock_divider / self.source_clock_mhz
+        clock_period_us = self.clock_div_ratio / self.source_clock_mhz
 
         self.plot.getAxis("left").setTicks(
             [[(baselines[name], name) for name in self.row_names]]
@@ -915,8 +957,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
         if previous_x_range is None or previous_y_range is None:
             self.plot.setXRange(self.x_min_us, self.x_max_us, padding=0)
             self.plot.setYRange(
-                min(baselines.values()) - 0.75,
-                max(baselines.values()) + 0.75,
+                -0.75,
+                (TIMING_FIXED_ROW_COUNT - 1) * self.row_gap + 0.75,
                 padding=0,
             )
         else:
@@ -1260,7 +1302,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         if not self.has_timing_config:
             self.frequency_label.setText("No config loaded")
             return
-        frequency_mhz = self.source_clock_mhz / self.clock_divider
+        frequency_mhz = self.source_clock_mhz / self.clock_div_ratio
         self.frequency_label.setText(f"{frequency_mhz:.2f} [MHz]")
 
     def delay_status_text(self) -> str:
