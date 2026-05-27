@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 set APP_NAME=DCDC_clock_simulator
-set APP_VERSION=v1.0.0
+set APP_VERSION=v0.0.0
 set ZIP_NAME=%APP_NAME%_%APP_VERSION%
 
 echo ========================================
@@ -22,11 +22,9 @@ uv run pyinstaller ^
   --windowed ^
   --name "%APP_NAME%" ^
   --icon "icon\dc_icon.ico" ^
-  --add-data "シリアル_48us_CLK1.xlsx;." ^
-  --add-data "シリアル_48us_CLK2.xlsx;." ^
-  --add-data "シリアル_48us_CLK3.xlsx;." ^
-  --add-data "シリアル_48us_CLK4.xlsx;." ^
-  --add-data "シリアル_48us_CLK5.xlsx;." ^
+  --collect-all "PyQt6" ^
+  --collect-all "pyqtgraph" ^
+  --add-data "config;config" ^
   main.py
 
 echo.
