@@ -545,11 +545,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.addWidget(self.margin_plot, 0, 1)
         layout.addWidget(self.delay_sweep_plot, 0, 2)
         layout.addWidget(self.create_control_panel(), 1, 0)
-        layout.addWidget(self.create_margin_legend(), 1, 1)
-        if self.include_copy_button:
-            layout.addWidget(self.create_copy_button_panel(), 1, 2)
-        else:
-            layout.addWidget(QtWidgets.QWidget(), 1, 2)
+        layout.addWidget(self.create_margin_legend_with_button(), 1, 1)
+        layout.addWidget(QtWidgets.QWidget(), 1, 2)
         self.setCentralWidget(central)
 
         self.plot.setBackground(self.theme.background)
@@ -837,6 +834,78 @@ class TimingDiagram(QtWidgets.QMainWindow):
             row_layout.addStretch(1)
             layout.addWidget(row)
         return legend
+
+    def create_margin_legend_with_button(self) -> QtWidgets.QWidget:
+        """凡例とcopy imageボタンを縦に並べたパネル（中グラフの下に配置）"""
+        panel = QtWidgets.QWidget()
+        panel.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.setSpacing(4)
+
+        entries = [
+            [
+                ("△", "CDS1↓ to SW↑", self.theme.cds1),
+                ("▽", "CDS1↓ to SW↓", self.theme.cds1),
+            ],
+            [
+                ("▲", "CDS2↓ to SW↑", self.theme.cds2),
+                ("▼", "CDS2↓ to SW↓", self.theme.cds2),
+            ],
+        ]
+        for row_entries in entries:
+            row = QtWidgets.QWidget(panel)
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(18)
+            row_layout.addStretch(1)
+            for marker, text, color in row_entries:
+                label = QtWidgets.QLabel(f"{marker} {text}")
+                label.setStyleSheet(
+                    f'color: {color}; font-family: "{self.font_family}"; '
+                    f"font-size: {APP_FONT_SIZE_PT}pt;"
+                )
+                row_layout.addWidget(label)
+            row_layout.addStretch(1)
+            layout.addWidget(row)
+
+        if self.include_copy_button:
+            button = QtWidgets.QPushButton("copy image")
+            self.copy_image_button = button
+            button.setFixedWidth(104)
+            button.setFixedHeight(30)
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background: {self.theme.button_background};
+                    border: 1px solid {self.theme.control_border};
+                    color: {self.theme.control_text};
+                    font-family: "{self.font_family}";
+                    font-size: {APP_FONT_SIZE_PT}pt;
+                    padding: 4px 12px;
+                }}
+                QPushButton:hover {{
+                    background: {self.theme.button_hover};
+                }}
+                QPushButton:pressed {{
+                    background: {self.theme.control_border};
+                    padding-top: 5px;
+                    padding-bottom: 3px;
+                }}
+                """
+            )
+            button.clicked.connect(self.copy_image_to_clipboard)
+            button_row = QtWidgets.QWidget(panel)
+            button_layout = QtWidgets.QHBoxLayout(button_row)
+            button_layout.setContentsMargins(0, 0, 0, 0)
+            button_layout.addStretch(1)
+            button_layout.addWidget(button)
+            layout.addWidget(button_row)
+
+        return panel
 
     def create_copy_button_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
@@ -1628,6 +1697,13 @@ class TimingDiagram(QtWidgets.QMainWindow):
             plot_widget.setYRange(y_range[0], y_range[1], padding=0)
 
     def copy_image_to_clipboard(self) -> None:
+        # ボタンを即座に "copied" に変更・無効化（タイマーはコピー完了後にセット）
+        button = getattr(self, "copy_image_button", None)
+        if button is not None:
+            button.setText("copied")
+            button.setEnabled(False)
+            QtWidgets.QApplication.processEvents()
+
         copy_window: TimingDiagram | None = None
         try:
             copy_window = TimingDiagram(
@@ -1657,20 +1733,77 @@ class TimingDiagram(QtWidgets.QMainWindow):
             copy_window.show()
             QtWidgets.QApplication.processEvents()
 
-            pixmap = copy_window.centralWidget().grab()
+            # 中グラフ（margin_plot）の ViewBox 範囲をキャプチャ
+            # （グラフタイトル・縦軸ラベル・横軸タイトルを除外、電源名ラベルは含む）
+            central_widget = copy_window.centralWidget()
+            margin_plot_widget = copy_window.margin_plot
+
+            # ViewBox の矩形を centralWidget のウィジェット座標系に変換
+            view_box = copy_window.margin_plot.getPlotItem().getViewBox()
+            vb_scene_rect = view_box.mapRectToScene(view_box.boundingRect())
+            vb_tl_scene = vb_scene_rect.topLeft()
+            vb_br_scene = vb_scene_rect.bottomRight()
+            vb_tl_local = margin_plot_widget.mapFromScene(vb_tl_scene)
+            vb_br_local = margin_plot_widget.mapFromScene(vb_br_scene)
+            vb_tl = central_widget.mapFromGlobal(
+                margin_plot_widget.mapToGlobal(
+                    QtCore.QPoint(int(vb_tl_local.x()), int(vb_tl_local.y()))
+                )
+            )
+            vb_br = central_widget.mapFromGlobal(
+                margin_plot_widget.mapToGlobal(
+                    QtCore.QPoint(int(vb_br_local.x()), int(vb_br_local.y()))
+                )
+            )
+
+            # 縦軸ラベル（"delta [ns]"、90度回転）の幅だけ除外し、数値目盛りは含める
+            left_axis = copy_window.margin_plot.getAxis("left")
+            left_label_width = int(left_axis.label.boundingRect().height())
+            margin_pos = margin_plot_widget.mapTo(central_widget, QtCore.QPoint(0, 0))
+            crop_left = margin_pos.x() + left_label_width
+            crop_top = vb_tl.y()
+            # 右枠線が切れないよう +2px（centralWidget幅を超えないようクランプ）
+            crop_right = min(vb_br.x() + 2, central_widget.width())
+
+            # 電源名ラベルを含めるため ViewBox 下端から目盛りラベル分だけ下に伸ばす
+            # PLOT_BOTTOM_AXIS_HEIGHT_PX = 目盛りラベル + 軸タイトルの合計高さ
+            bottom_axis = copy_window.margin_plot.getAxis("bottom")
+            label_height = int(bottom_axis.label.boundingRect().height())
+            tick_label_height = PLOT_BOTTOM_AXIS_HEIGHT_PX - label_height
+            crop_bottom = min(vb_br.y() + tick_label_height, central_widget.height())
+
+            crop_rect = QtCore.QRect(
+                crop_left,
+                crop_top,
+                crop_right - crop_left,
+                crop_bottom - crop_top,
+            )
+            pixmap = central_widget.grab(crop_rect)
             QtWidgets.QApplication.clipboard().setPixmap(pixmap)
-            self.show_copy_feedback()
         finally:
             if copy_window is not None:
                 copy_window.close()
                 copy_window.deleteLater()
+
+        # コピー処理完了後に700msタイマーをセット
+        if button is not None:
+            QtCore.QTimer.singleShot(
+                700,
+                lambda: (button.setText("copy image"), button.setEnabled(True)),
+            )
 
     def show_copy_feedback(self) -> None:
         button = getattr(self, "copy_image_button", None)
         if button is None:
             return
         button.setText("copied")
-        QtCore.QTimer.singleShot(700, lambda: button.setText("copy image"))
+        button.setEnabled(False)
+
+        def restore() -> None:
+            button.setText("copy image")
+            button.setEnabled(True)
+
+        QtCore.QTimer.singleShot(700, restore)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
