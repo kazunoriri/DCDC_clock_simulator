@@ -515,6 +515,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.pl_delay_status_label: QtWidgets.QLabel | None = None
         self.power_duty_mode_combo: QtWidgets.QComboBox | None = None
         self.copy_image_button: QtWidgets.QPushButton | None = None
+        self.copy_data_button: QtWidgets.QPushButton | None = None
 
         pg.setConfigOptions(antialias=True)
 
@@ -545,8 +546,8 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.addWidget(self.margin_plot, 0, 1)
         layout.addWidget(self.delay_sweep_plot, 0, 2)
         layout.addWidget(self.create_control_panel(), 1, 0)
-        layout.addWidget(self.create_margin_legend_with_button(), 1, 1)
-        layout.addWidget(QtWidgets.QWidget(), 1, 2)
+        layout.addWidget(self.create_copy_button_row(), 1, 1)
+        layout.addWidget(self.create_margin_legend(), 1, 2)
         self.setCentralWidget(central)
 
         self.plot.setBackground(self.theme.background)
@@ -789,7 +790,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.setColumnStretch(2, 1)
 
         self.pl_delay_status_label = QtWidgets.QLabel(self.delay_status_text())
-        duty_label = QtWidgets.QLabel("power duty display")
+        duty_label = QtWidgets.QLabel("Switching Duty")
 
         layout.addWidget(self.pl_delay_status_label, 0, 0)
         layout.addWidget(self.pl_clk1_delay_combo, 0, 1)
@@ -904,6 +905,58 @@ class TimingDiagram(QtWidgets.QMainWindow):
             button_layout.addStretch(1)
             button_layout.addWidget(button)
             layout.addWidget(button_row)
+
+        return panel
+
+    def create_copy_button_row(self) -> QtWidgets.QWidget:
+        """中グラフ下：copy data / copy image ボタンを右端に配置するパネル（2行グリッド）"""
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QGridLayout(panel)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.setHorizontalSpacing(6)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 0)
+        layout.setColumnStretch(2, 0)
+        layout.setRowStretch(0, 1)
+        layout.setRowStretch(1, 0)
+
+        button_style = f"""
+            QPushButton {{
+                background: {self.theme.button_background};
+                border: 1px solid {self.theme.control_border};
+                color: {self.theme.control_text};
+                font-family: "{self.font_family}";
+                font-size: {APP_FONT_SIZE_PT}pt;
+                padding: 4px 12px;
+            }}
+            QPushButton:hover {{
+                background: {self.theme.button_hover};
+            }}
+            QPushButton:pressed {{
+                background: {self.theme.control_border};
+                padding-top: 5px;
+                padding-bottom: 3px;
+            }}
+        """
+
+        # copy data ボタン（列1）
+        data_button = QtWidgets.QPushButton("copy data")
+        self.copy_data_button = data_button
+        data_button.setFixedWidth(104)
+        data_button.setFixedHeight(30)
+        data_button.setStyleSheet(button_style)
+        data_button.clicked.connect(self.copy_data_to_clipboard)
+        layout.addWidget(data_button, 1, 1)
+
+        if self.include_copy_button:
+            # copy image ボタン（列2）
+            image_button = QtWidgets.QPushButton("copy image")
+            self.copy_image_button = image_button
+            image_button.setFixedWidth(104)
+            image_button.setFixedHeight(30)
+            image_button.setStyleSheet(button_style)
+            image_button.clicked.connect(self.copy_image_to_clipboard)
+            layout.addWidget(image_button, 1, 2)
 
         return panel
 
@@ -1356,36 +1409,41 @@ class TimingDiagram(QtWidgets.QMainWindow):
             for index in range(len(self.power_nets))
         ]
 
-        series_points: list[
-            tuple[list[float], list[float], QtGui.QPainterPath, str, str | None]
-        ] = []
+        # 計算を1回だけ行いキャッシュ（各 delay_ns ごとに1回だけ calculate を呼ぶ）
+        deltas_cache: dict[float, list[dict[str, float]]] = {
+            delay_ns: self.calculate_power_edge_deltas_ns(clock_period_us, pl_delay_ns=delay_ns)
+            for delay_ns in self.pl_delay_candidates_ns
+        }
 
-        for key, series_offset, symbol, color, brush_color in series:
-            if not key.endswith("_fall"):
-                continue
+        # range bars を NaN 区切りで一括描画（plot() 呼び出し回数を大幅削減）
+        fall_keys_colors = [
+            (key, series_offset, color)
+            for key, series_offset, _symbol, color, _brush in series
+            if key.endswith("_fall")
+        ]
+        for key, series_offset, color in fall_keys_colors:
             range_pen = pg.mkPen(QtGui.QColor(color).lighter(115), width=0.8)
+            rx: list[float] = []
+            ry: list[float] = []
             for delay_ns in self.pl_delay_candidates_ns:
-                deltas = self.calculate_power_edge_deltas_ns(
-                    clock_period_us,
-                    pl_delay_ns=delay_ns,
-                )
+                deltas = deltas_cache[delay_ns]
                 for power_index, entry in enumerate(deltas):
                     x = delay_ns + series_offset + power_offsets[power_index]
                     for y_min, y_max in entry[f"{key}_segments"]:
-                        self.delay_sweep_plot.plot(
-                            [x, x],
-                            [y_min, y_max],
-                            pen=range_pen,
-                        )
+                        rx.extend([x, x, float("nan")])
+                        ry.extend([y_min, y_max, float("nan")])
+            if rx:
+                self.delay_sweep_plot.plot(rx, ry, pen=range_pen)
 
+        # シンボル描画
+        series_points: list[
+            tuple[list[float], list[float], QtGui.QPainterPath, str, str | None]
+        ] = []
         for key, series_offset, symbol, color, brush_color in series:
             x_values: list[float] = []
             y_values: list[float] = []
             for delay_ns in self.pl_delay_candidates_ns:
-                deltas = self.calculate_power_edge_deltas_ns(
-                    clock_period_us,
-                    pl_delay_ns=delay_ns,
-                )
+                deltas = deltas_cache[delay_ns]
                 for power_index, entry in enumerate(deltas):
                     x = delay_ns + series_offset + power_offsets[power_index]
                     if key.endswith("_fall"):
@@ -1790,6 +1848,51 @@ class TimingDiagram(QtWidgets.QMainWindow):
             QtCore.QTimer.singleShot(
                 700,
                 lambda: (button.setText("copy image"), button.setEnabled(True)),
+            )
+
+    def copy_data_to_clipboard(self) -> None:
+        """中グラフ（margin_plot）のデータをTSV形式でクリップボードにコピーする"""
+        if not self.has_timing_config or not self.power_nets:
+            return
+
+        button = getattr(self, "copy_data_button", None)
+        if button is not None:
+            button.setText("copied")
+            button.setEnabled(False)
+            QtWidgets.QApplication.processEvents()
+
+        clock_period_us = self.clock_div_ratio / self.source_clock_mhz
+        deltas = self.calculate_power_edge_deltas_ns(clock_period_us)
+
+        headers = [
+            "電源名",
+            "CDS1↓ to SW↑ [ns]",
+            "CDS1↓ to SW↓ min [ns]",
+            "CDS1↓ to SW↓ max [ns]",
+            "CDS2↓ to SW↑ [ns]",
+            "CDS2↓ to SW↓ min [ns]",
+            "CDS2↓ to SW↓ max [ns]",
+        ]
+        rows = ["\t".join(headers)]
+        for power_net, entry in zip(self.power_nets, deltas, strict=True):
+            row = [
+                power_net.name,
+                f"{entry['cds1_rise']:.1f}",
+                f"{entry['cds1_fall_min']:.1f}",
+                f"{entry['cds1_fall_max']:.1f}",
+                f"{entry['cds2_rise']:.1f}",
+                f"{entry['cds2_fall_min']:.1f}",
+                f"{entry['cds2_fall_max']:.1f}",
+            ]
+            rows.append("\t".join(row))
+
+        tsv_text = "\n".join(rows)
+        QtWidgets.QApplication.clipboard().setText(tsv_text)
+
+        if button is not None:
+            QtCore.QTimer.singleShot(
+                700,
+                lambda: (button.setText("copy data"), button.setEnabled(True)),
             )
 
     def show_copy_feedback(self) -> None:
