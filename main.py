@@ -13,12 +13,14 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 US_PER_NS = 0.001
 POWER_MARGIN_RANGE_NS = 250.0
-TITLE_FONT_SIZE_PT = 12
-APP_FONT_SIZE_PT = 11
+DUTY_MARGIN_SAMPLE_STEP_PERCENT = 0.1
+TITLE_FONT_SIZE_PT = 10
+APP_FONT_SIZE_PT = 9
 OUTER_MARGIN_PX = 12
 GRAPH_SPACING_PX = 24
 ROW_SPACING_PX = 14
-CONTROL_ROW_HEIGHT_PX = 48
+CONTROL_ROW_HEIGHT_PX = 72
+COMPACT_WINDOW_HEIGHT_PX = 600
 MAX_PL_DELAY_NS = 250.0
 PLOT_BOTTOM_AXIS_HEIGHT_PX = 62
 TIMING_LEFT_AXIS_WIDTH_PX = 120
@@ -43,7 +45,8 @@ CONFIG_REQUIRED_KEYS = [
     "clock_div_ratio",
     *[f"power_net_name_{index}" for index in range(POWER_NET_COUNT)],
     *[f"power_net_delay_ns_{index}" for index in range(POWER_NET_COUNT)],
-    *[f"power_net_duty_percent_{index}" for index in range(POWER_NET_COUNT)],
+    *[f"power_net_duty_percent_{index}_min" for index in range(POWER_NET_COUNT)],
+    *[f"power_net_duty_percent_{index}_max" for index in range(POWER_NET_COUNT)],
 ]
 
 
@@ -120,11 +123,16 @@ class PulseSignal:
 class PowerNet:
     name: str
     delay_ns: float
-    duty_percent: float
+    duty_percent_min: float
+    duty_percent_max: float
 
     @property
     def duty(self) -> float:
-        return self.duty_percent / 100.0
+        return self.duty_percent_min / 100.0
+
+    @property
+    def has_duty_range(self) -> bool:
+        return not math.isclose(self.duty_percent_min, self.duty_percent_max)
 
 
 @dataclass(frozen=True)
@@ -147,14 +155,22 @@ class TimingConfig:
     power_net_delay_ns_5: float | None = 50.0
     power_net_delay_ns_6: float | None = None
     power_net_delay_ns_7: float | None = None
-    power_net_duty_percent_0: float | None = 35.0
-    power_net_duty_percent_1: float | None = 42.5
-    power_net_duty_percent_2: float | None = 50.0
-    power_net_duty_percent_3: float | None = 57.5
-    power_net_duty_percent_4: float | None = 65.0
-    power_net_duty_percent_5: float | None = 72.5
-    power_net_duty_percent_6: float | None = None
-    power_net_duty_percent_7: float | None = None
+    power_net_duty_percent_0_min: float | None = 35.0
+    power_net_duty_percent_1_min: float | None = 42.5
+    power_net_duty_percent_2_min: float | None = 50.0
+    power_net_duty_percent_3_min: float | None = 57.5
+    power_net_duty_percent_4_min: float | None = 65.0
+    power_net_duty_percent_5_min: float | None = 72.5
+    power_net_duty_percent_6_min: float | None = None
+    power_net_duty_percent_7_min: float | None = None
+    power_net_duty_percent_0_max: float | None = 35.0
+    power_net_duty_percent_1_max: float | None = 42.5
+    power_net_duty_percent_2_max: float | None = 50.0
+    power_net_duty_percent_3_max: float | None = 57.5
+    power_net_duty_percent_4_max: float | None = 65.0
+    power_net_duty_percent_5_max: float | None = 72.5
+    power_net_duty_percent_6_max: float | None = None
+    power_net_duty_percent_7_max: float | None = None
     gate_period_us: float = 60.0
     cds1_rise_us: float = 1.0
     cds1_fall_us: float = 15.0
@@ -275,6 +291,17 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
             return None
         return value if math.isfinite(value) and 0.0 < value <= 100.0 else None
 
+    def parse_duty_percent_range(index: int) -> tuple[float | None, float | None]:
+        min_key = f"power_net_duty_percent_{index}_min"
+        max_key = f"power_net_duty_percent_{index}_max"
+        duty_min = parse_duty_percent(min_key)
+        duty_max = parse_duty_percent(max_key)
+        if (duty_min is None) != (duty_max is None):
+            raise ValueError(f"{min_key} and {max_key} must be specified together.")
+        if duty_min is not None and duty_max is not None and duty_min > duty_max:
+            raise ValueError(f"{min_key} must be <= {max_key}.")
+        return duty_min, duty_max
+
     def parse_required_float(key: str, *, positive: bool = False) -> tuple[float, str | None]:
         try:
             value = float(data[key])
@@ -335,9 +362,9 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
             values[f"power_net_delay_ns_{index}"] = parse_positive_float(
                 f"power_net_delay_ns_{index}"
             )
-            values[f"power_net_duty_percent_{index}"] = parse_duty_percent(
-                f"power_net_duty_percent_{index}"
-            )
+            duty_min, duty_max = parse_duty_percent_range(index)
+            values[f"power_net_duty_percent_{index}_min"] = duty_min
+            values[f"power_net_duty_percent_{index}_max"] = duty_max
     except (TypeError, ValueError) as exc:
         return None, f"Configuration error: {exc}"
 
@@ -347,6 +374,17 @@ def load_timing_config(path: Path | None = None) -> tuple[TimingConfig | None, s
         return None, "cds1_rise_us must be less than cds1_fall_us."
     if values["cds2_rise_us"] >= values["cds2_fall_us"]:
         return None, "cds2_rise_us must be less than cds2_fall_us."
+    for index in range(POWER_NET_COUNT):
+        name = values[f"power_net_name_{index}"].strip()
+        delay_ns = values[f"power_net_delay_ns_{index}"]
+        duty_min = values[f"power_net_duty_percent_{index}_min"]
+        duty_max = values[f"power_net_duty_percent_{index}_max"]
+        if name and delay_ns is not None and (duty_min is None or duty_max is None):
+            return (
+                None,
+                f"power_net_duty_percent_{index}_min/max must be numbers "
+                "between 0 and 100.",
+            )
 
     return TimingConfig(**values), None
 
@@ -455,7 +493,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.include_copy_button = include_copy_button
         self.theme = COPY_THEME if export_mode else SCREEN_THEME
         self.setWindowTitle("DCDC Clock Timing")
-        self.resize(1760, 720)
+        self.resize(1760, COMPACT_WINDOW_HEIGHT_PX)
         if not self.export_mode:
             self.move(0, 0)
             self.setAcceptDrops(True)
@@ -465,6 +503,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.amplitude = 0.74
         self.source_clock_mhz = 175.0
         self.pl_clk1_delay_ns = 0.0
+        self.power_duty_display_mode = "min"
         self.config: TimingConfig | None = None
         self.has_timing_config = False
         startup_config, startup_error = load_timing_config()
@@ -474,6 +513,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
         self.app_font = QtGui.QFont(self.font_family, APP_FONT_SIZE_PT)
         self.baselines: dict[str, float] = {}
         self.pl_delay_status_label: QtWidgets.QLabel | None = None
+        self.power_duty_mode_combo: QtWidgets.QComboBox | None = None
         self.copy_image_button: QtWidgets.QPushButton | None = None
 
         pg.setConfigOptions(antialias=True)
@@ -641,19 +681,29 @@ class TimingDiagram(QtWidgets.QMainWindow):
             getattr(active_config, f"power_net_delay_ns_{index}")
             for index in range(POWER_NET_COUNT)
         ]
-        power_net_duty_percents = [
-            getattr(active_config, f"power_net_duty_percent_{index}")
+        power_net_duty_percent_mins = [
+            getattr(active_config, f"power_net_duty_percent_{index}_min")
+            for index in range(POWER_NET_COUNT)
+        ]
+        power_net_duty_percent_maxs = [
+            getattr(active_config, f"power_net_duty_percent_{index}_max")
             for index in range(POWER_NET_COUNT)
         ]
         self.power_nets = [
-            PowerNet(name.strip(), delay_ns, duty_percent)
-            for name, delay_ns, duty_percent in zip(
+            PowerNet(name.strip(), delay_ns, duty_percent_min, duty_percent_max)
+            for name, delay_ns, duty_percent_min, duty_percent_max in zip(
                 power_net_names,
                 power_net_delays_ns,
-                power_net_duty_percents,
+                power_net_duty_percent_mins,
+                power_net_duty_percent_maxs,
                 strict=True,
             )
-            if name.strip() and delay_ns is not None and duty_percent is not None
+            if (
+                name.strip()
+                and delay_ns is not None
+                and duty_percent_min is not None
+                and duty_percent_max is not None
+            )
         ]
         if not self.has_timing_config:
             self.power_nets = []
@@ -723,26 +773,31 @@ class TimingDiagram(QtWidgets.QMainWindow):
         layout.setContentsMargins(8, 6, 8, 8)
         layout.setSpacing(12)
 
-        self.frequency_label = QtWidgets.QLabel()
-        self.frequency_label.setObjectName("result")
-        self.update_frequency_label()
         self.pl_clk1_delay_combo = self.create_delay_combo()
+        self.power_duty_mode_combo = self.create_duty_mode_combo()
         self.control_widgets_by_row: dict[str, QtWidgets.QWidget] = {}
 
-        layout.addWidget(self.frequency_label)
         layout.addWidget(self.create_clock_editor(parent=panel))
         layout.addStretch(1)
         return panel
 
     def create_clock_editor(self, parent: QtWidgets.QWidget) -> QtWidgets.QWidget:
         editor = QtWidgets.QWidget(parent)
-        layout = QtWidgets.QHBoxLayout(editor)
+        layout = QtWidgets.QGridLayout(editor)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(4)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 0)
+        layout.setColumnStretch(2, 1)
 
         self.pl_delay_status_label = QtWidgets.QLabel(self.delay_status_text())
-        layout.addWidget(self.pl_delay_status_label)
-        layout.addWidget(self.pl_clk1_delay_combo)
+        duty_label = QtWidgets.QLabel("power duty display")
+
+        layout.addWidget(self.pl_delay_status_label, 0, 0)
+        layout.addWidget(self.pl_clk1_delay_combo, 0, 1)
+        layout.addWidget(duty_label, 1, 0)
+        layout.addWidget(self.power_duty_mode_combo, 1, 1)
         editor.adjustSize()
         return editor
 
@@ -752,30 +807,40 @@ class TimingDiagram(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
-        layout = QtWidgets.QHBoxLayout(legend)
+        layout = QtWidgets.QVBoxLayout(legend)
         layout.setContentsMargins(8, 6, 8, 8)
-        layout.setSpacing(18)
+        layout.setSpacing(2)
 
         entries = [
-            ("△", "CDS1↓ to SW↑", self.theme.cds1),
-            ("▽", "CDS1↓ to SW↓", self.theme.cds1),
-            ("▲", "CDS2↓ to SW↑", self.theme.cds2),
-            ("▼", "CDS2↓ to SW↓", self.theme.cds2),
+            [
+                ("△", "CDS1↓ to SW↑", self.theme.cds1),
+                ("▽", "CDS1↓ to SW↓", self.theme.cds1),
+            ],
+            [
+                ("▲", "CDS2↓ to SW↑", self.theme.cds2),
+                ("▼", "CDS2↓ to SW↓", self.theme.cds2),
+            ],
         ]
-        for marker, text, color in entries:
-            label = QtWidgets.QLabel(f"{marker} {text}")
-            label.setStyleSheet(
-                f'color: {color}; font-family: "{self.font_family}"; '
-                f"font-size: {APP_FONT_SIZE_PT}pt;"
-            )
-            layout.addWidget(label)
-        layout.insertStretch(0, 1)
-        layout.addStretch(1)
+        for row_entries in entries:
+            row = QtWidgets.QWidget(legend)
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(18)
+            row_layout.addStretch(1)
+            for marker, text, color in row_entries:
+                label = QtWidgets.QLabel(f"{marker} {text}")
+                label.setStyleSheet(
+                    f'color: {color}; font-family: "{self.font_family}"; '
+                    f"font-size: {APP_FONT_SIZE_PT}pt;"
+                )
+                row_layout.addWidget(label)
+            row_layout.addStretch(1)
+            layout.addWidget(row)
         return legend
 
     def create_copy_button_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(panel)
+        layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(8, 6, 8, 8)
         layout.addStretch(1)
 
@@ -804,7 +869,12 @@ class TimingDiagram(QtWidgets.QMainWindow):
             """
         )
         button.clicked.connect(self.copy_image_to_clipboard)
-        layout.addWidget(button)
+        button_row = QtWidgets.QWidget(panel)
+        button_layout = QtWidgets.QHBoxLayout(button_row)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.addStretch(1)
+        button_layout.addWidget(button)
+        layout.addWidget(button_row)
         return panel
 
     def create_pl_delay_candidates_ns(self) -> list[float]:
@@ -825,6 +895,15 @@ class TimingDiagram(QtWidgets.QMainWindow):
         for delay_ns in self.pl_delay_candidates_ns:
             combo.addItem(f"{delay_ns:.1f}", delay_ns)
         self.select_nearest_delay_combo_index(combo, self.pl_clk1_delay_ns)
+        combo.setEnabled(self.has_timing_config)
+        combo.currentIndexChanged.connect(self.apply_inputs)
+        return combo
+
+    def create_duty_mode_combo(self) -> QtWidgets.QComboBox:
+        combo = QtWidgets.QComboBox()
+        combo.setFixedWidth(86)
+        combo.addItem("min", "min")
+        combo.addItem("max", "max")
         combo.setEnabled(self.has_timing_config)
         combo.currentIndexChanged.connect(self.apply_inputs)
         return combo
@@ -939,7 +1018,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
                 start_us=dig_start_us,
                 end_us=self.gate_period_us,
                 period_us=clock_period_us,
-                duty=power_net.duty,
+                duty=self.display_power_net_duty(power_net),
                 low=dig_base - half_amp,
                 high=dig_base + half_amp,
             )
@@ -983,14 +1062,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
 
     def draw_margin_plot(self, clock_period_us: float) -> None:
         self.margin_plot.clear()
-        self.margin_plot.getAxis("bottom").setTicks(
-            [
-                [
-                    (index, shorten_tick_label(power_net.name))
-                    for index, power_net in enumerate(self.power_nets)
-                ]
-            ]
-        )
+        self.update_margin_axis_ticks()
         power_net_count = len(self.power_nets)
         self.margin_plot.setXRange(
             -0.5,
@@ -1020,6 +1092,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
             )
 
         deltas = self.calculate_power_edge_deltas_ns(clock_period_us)
+        self.update_margin_tooltip(deltas)
         series = [
             ("cds1_rise", -0.18, self.triangle_symbol(up=True), self.theme.cds1, None),
             (
@@ -1045,8 +1118,21 @@ class TimingDiagram(QtWidgets.QMainWindow):
             ),
         ]
         for key, x_offset, symbol, color, brush_color in series:
-            x_values = [index + x_offset for index in range(len(deltas))]
-            y_values = [entry[key] for entry in deltas]
+            if key.endswith("_fall"):
+                self.add_margin_range_bars(deltas, key, x_offset, color)
+                x_values: list[float] = []
+                y_values: list[float] = []
+                for index, entry in enumerate(deltas):
+                    x_values.extend([index + x_offset, index + x_offset])
+                    y_values.extend(
+                        [
+                            entry[f"{key}_duty_min"],
+                            entry[f"{key}_duty_max"],
+                        ]
+                    )
+            else:
+                x_values = [index + x_offset for index in range(len(deltas))]
+                y_values = [entry[key] for entry in deltas]
             self.margin_plot.plot(
                 x_values,
                 y_values,
@@ -1056,6 +1142,97 @@ class TimingDiagram(QtWidgets.QMainWindow):
                 symbolPen=pg.mkPen(color, width=1.5),
                 symbolBrush=pg.mkBrush(brush_color) if brush_color else None,
             )
+
+    def update_margin_axis_ticks(self) -> None:
+        self.margin_plot.getAxis("bottom").setTicks(
+            [
+                [
+                    (index, power_net.name)
+                    for index, power_net in enumerate(self.power_nets)
+                ]
+            ]
+        )
+        self.margin_plot.getAxis("bottom").setStyle(
+            tickFont=self.margin_tick_label_font(),
+            tickTextOffset=6,
+            autoExpandTextSpace=True,
+        )
+
+    def display_power_net_duty(self, power_net: PowerNet) -> float:
+        if self.power_duty_display_mode == "max":
+            return power_net.duty_percent_max / 100.0
+        return power_net.duty_percent_min / 100.0
+
+    def margin_tick_label_max_chars(self, power_net_count: int) -> int:
+        if power_net_count <= 0:
+            return MAX_POWER_TICK_LABEL_CHARS
+
+        plot_width = max(self.margin_plot.width(), 1)
+        usable_width = max(plot_width - MARGIN_LEFT_AXIS_WIDTH_PX - 24, 1)
+        slot_width = usable_width / power_net_count
+        char_width = max(self.app_font_metrics().horizontalAdvance("M"), 1)
+        dynamic_chars = max(4, int(slot_width / char_width) - 1)
+        return min(MAX_POWER_TICK_LABEL_CHARS, dynamic_chars)
+
+    def margin_tick_label_font(self) -> QtGui.QFont:
+        font = QtGui.QFont(self.font_family, APP_FONT_SIZE_PT)
+        power_net_count = len(self.power_nets)
+        if power_net_count <= 0:
+            return font
+
+        plot_width = max(self.margin_plot.width(), 1)
+        usable_width = max(plot_width - MARGIN_LEFT_AXIS_WIDTH_PX - 24, 1)
+        slot_width = usable_width / power_net_count
+        metrics = QtGui.QFontMetrics(font)
+        longest_width = max(
+            metrics.horizontalAdvance(power_net.name)
+            for power_net in self.power_nets
+        )
+        if longest_width <= slot_width:
+            return font
+
+        scaled_size = max(6, int(APP_FONT_SIZE_PT * slot_width / longest_width))
+        font.setPointSize(scaled_size)
+        return font
+
+    def app_font_metrics(self) -> QtGui.QFontMetrics:
+        return QtGui.QFontMetrics(self.app_font)
+
+    def add_margin_range_bars(
+        self,
+        deltas: list[dict[str, float]],
+        key: str,
+        x_offset: float,
+        color: str,
+    ) -> None:
+        pen = pg.mkPen(color, width=1.6)
+        for index, entry in enumerate(deltas):
+            x = index + x_offset
+            for y_min, y_max in entry[f"{key}_segments"]:
+                self.margin_plot.plot(
+                    [x, x],
+                    [y_min, y_max],
+                    pen=pen,
+                )
+
+    def update_margin_tooltip(self, deltas: list[dict[str, float]]) -> None:
+        if not deltas:
+            self.margin_plot.setToolTip("")
+            return
+
+        lines = []
+        for power_net, entry in zip(self.power_nets, deltas, strict=True):
+            lines.append(power_net.name)
+            for label, key in (
+                ("CDS1↓ to SW↓", "cds1_fall"),
+                ("CDS2↓ to SW↓", "cds2_fall"),
+            ):
+                lines.append(
+                    f"  {label}: {entry[f'{key}_min']:.1f}〜"
+                    f"{entry[f'{key}_max']:.1f} ns, "
+                    f"worst {entry[f'{key}_worst_abs']:.1f} ns"
+                )
+        self.margin_plot.setToolTip("\n".join(lines))
 
     def draw_delay_sweep_plot(self, clock_period_us: float) -> None:
         self.delay_sweep_plot.clear()
@@ -1110,6 +1287,28 @@ class TimingDiagram(QtWidgets.QMainWindow):
             for index in range(len(self.power_nets))
         ]
 
+        series_points: list[
+            tuple[list[float], list[float], QtGui.QPainterPath, str, str | None]
+        ] = []
+
+        for key, series_offset, symbol, color, brush_color in series:
+            if not key.endswith("_fall"):
+                continue
+            range_pen = pg.mkPen(QtGui.QColor(color).lighter(115), width=0.8)
+            for delay_ns in self.pl_delay_candidates_ns:
+                deltas = self.calculate_power_edge_deltas_ns(
+                    clock_period_us,
+                    pl_delay_ns=delay_ns,
+                )
+                for power_index, entry in enumerate(deltas):
+                    x = delay_ns + series_offset + power_offsets[power_index]
+                    for y_min, y_max in entry[f"{key}_segments"]:
+                        self.delay_sweep_plot.plot(
+                            [x, x],
+                            [y_min, y_max],
+                            pen=range_pen,
+                        )
+
         for key, series_offset, symbol, color, brush_color in series:
             x_values: list[float] = []
             y_values: list[float] = []
@@ -1119,18 +1318,28 @@ class TimingDiagram(QtWidgets.QMainWindow):
                     pl_delay_ns=delay_ns,
                 )
                 for power_index, entry in enumerate(deltas):
-                    x_values.append(
-                        delay_ns + series_offset + power_offsets[power_index]
-                    )
-                    y_values.append(entry[key])
+                    x = delay_ns + series_offset + power_offsets[power_index]
+                    if key.endswith("_fall"):
+                        x_values.extend([x, x])
+                        y_values.extend(
+                            [
+                                entry[f"{key}_duty_min"],
+                                entry[f"{key}_duty_max"],
+                            ]
+                        )
+                    else:
+                        x_values.append(x)
+                        y_values.append(entry[key])
+            series_points.append((x_values, y_values, symbol, color, brush_color))
 
+        for x_values, y_values, symbol, color, brush_color in series_points:
             self.delay_sweep_plot.plot(
                 x_values,
                 y_values,
                 pen=None,
                 symbol=symbol,
-                symbolSize=7,
-                symbolPen=pg.mkPen(color, width=1.2),
+                symbolSize=8,
+                symbolPen=pg.mkPen(color, width=1.5),
                 symbolBrush=pg.mkBrush(brush_color) if brush_color else None,
             )
 
@@ -1145,7 +1354,18 @@ class TimingDiagram(QtWidgets.QMainWindow):
         deltas: list[dict[str, float]] = []
         for power_net in self.power_nets:
             rise_start_us = (pl_delay_ns + power_net.delay_ns) * US_PER_NS
-            fall_start_us = rise_start_us + clock_period_us * power_net.duty
+            cds1_fall = self.sample_fall_margin_range_ns(
+                self.cds1_end_us,
+                rise_start_us,
+                clock_period_us,
+                power_net,
+            )
+            cds2_fall = self.sample_fall_margin_range_ns(
+                self.cds2_end_us,
+                rise_start_us,
+                clock_period_us,
+                power_net,
+            )
             deltas.append(
                 {
                     "cds1_rise": self.nearest_clock_edge_delta_ns(
@@ -1153,24 +1373,93 @@ class TimingDiagram(QtWidgets.QMainWindow):
                         rise_start_us,
                         clock_period_us,
                     ),
-                    "cds1_fall": self.nearest_clock_edge_delta_ns(
-                        self.cds1_end_us,
-                        fall_start_us,
-                        clock_period_us,
-                    ),
+                    "cds1_fall": cds1_fall["duty_min"],
+                    "cds1_fall_duty_min": cds1_fall["duty_min"],
+                    "cds1_fall_duty_max": cds1_fall["duty_max"],
+                    "cds1_fall_min": cds1_fall["min"],
+                    "cds1_fall_max": cds1_fall["max"],
+                    "cds1_fall_worst_abs": cds1_fall["worst_abs"],
+                    "cds1_fall_segments": cds1_fall["segments"],
                     "cds2_rise": self.nearest_clock_edge_delta_ns(
                         self.cds2_end_us,
                         rise_start_us,
                         clock_period_us,
                     ),
-                    "cds2_fall": self.nearest_clock_edge_delta_ns(
-                        self.cds2_end_us,
-                        fall_start_us,
-                        clock_period_us,
-                    ),
+                    "cds2_fall": cds2_fall["duty_min"],
+                    "cds2_fall_duty_min": cds2_fall["duty_min"],
+                    "cds2_fall_duty_max": cds2_fall["duty_max"],
+                    "cds2_fall_min": cds2_fall["min"],
+                    "cds2_fall_max": cds2_fall["max"],
+                    "cds2_fall_worst_abs": cds2_fall["worst_abs"],
+                    "cds2_fall_segments": cds2_fall["segments"],
                 }
             )
         return deltas
+
+    def sample_fall_margin_range_ns(
+        self,
+        target_us: float,
+        rise_start_us: float,
+        clock_period_us: float,
+        power_net: PowerNet,
+    ) -> dict[str, float]:
+        samples = self.duty_percent_samples(
+            power_net.duty_percent_min,
+            power_net.duty_percent_max,
+        )
+        margins = [
+            self.nearest_clock_edge_delta_ns(
+                target_us,
+                rise_start_us + clock_period_us * duty_percent / 100.0,
+                clock_period_us,
+            )
+            for duty_percent in samples
+        ]
+        duty_min_margin = margins[0]
+        duty_max_margin = margins[-1]
+        segments = self.split_margin_segments_ns(
+            margins,
+            period_ns=clock_period_us / US_PER_NS,
+        )
+        return {
+            "duty_min": duty_min_margin,
+            "duty_max": duty_max_margin,
+            "min": min(margins),
+            "max": max(margins),
+            "worst_abs": min(abs(margin) for margin in margins),
+            "segments": segments,
+        }
+
+    def split_margin_segments_ns(
+        self,
+        margins: list[float],
+        *,
+        period_ns: float,
+    ) -> list[tuple[float, float]]:
+        if not margins:
+            return []
+
+        segments: list[list[float]] = [[margins[0]]]
+        jump_threshold_ns = period_ns * 0.5
+        for previous, current in zip(margins, margins[1:]):
+            if abs(current - previous) > jump_threshold_ns:
+                segments.append([current])
+            else:
+                segments[-1].append(current)
+
+        return [(min(segment), max(segment)) for segment in segments]
+
+    def duty_percent_samples(self, duty_min: float, duty_max: float) -> list[float]:
+        if math.isclose(duty_min, duty_max):
+            return [duty_min]
+
+        samples = [duty_min]
+        value = duty_min + DUTY_MARGIN_SAMPLE_STEP_PERCENT
+        while value < duty_max:
+            samples.append(value)
+            value += DUTY_MARGIN_SAMPLE_STEP_PERCENT
+        samples.append(duty_max)
+        return samples
 
     def align_control_panel(self) -> None:
         if not self.baselines:
@@ -1221,11 +1510,10 @@ class TimingDiagram(QtWidgets.QMainWindow):
             return
 
         self.pl_clk1_delay_ns = pl_clk1_delay_ns
+        self.power_duty_display_mode = self.parse_duty_mode()
         self.draw()
 
     def refresh_config_widgets(self) -> None:
-        if hasattr(self, "frequency_label"):
-            self.update_frequency_label()
         if self.pl_delay_status_label is not None:
             self.pl_delay_status_label.setText(self.delay_status_text())
         if hasattr(self, "pl_clk1_delay_combo"):
@@ -1239,6 +1527,11 @@ class TimingDiagram(QtWidgets.QMainWindow):
             )
             self.pl_clk1_delay_combo.blockSignals(False)
             self.pl_clk1_delay_combo.setEnabled(self.has_timing_config)
+        if self.power_duty_mode_combo is not None:
+            self.power_duty_mode_combo.blockSignals(True)
+            self.select_duty_mode_combo_index()
+            self.power_duty_mode_combo.blockSignals(False)
+            self.power_duty_mode_combo.setEnabled(self.has_timing_config)
         if hasattr(self, "delay_sweep_plot"):
             self.delay_sweep_plot.setLabel(
                 "bottom",
@@ -1299,12 +1592,19 @@ class TimingDiagram(QtWidgets.QMainWindow):
             return None
         return float(delay_ns)
 
-    def update_frequency_label(self) -> None:
-        if not self.has_timing_config:
-            self.frequency_label.setText("No config loaded")
+    def parse_duty_mode(self) -> str:
+        if self.power_duty_mode_combo is None:
+            return self.power_duty_display_mode
+        mode = self.power_duty_mode_combo.currentData()
+        return str(mode) if mode in {"min", "max"} else "min"
+
+    def select_duty_mode_combo_index(self) -> None:
+        if self.power_duty_mode_combo is None:
             return
-        frequency_mhz = self.source_clock_mhz / self.clock_div_ratio
-        self.frequency_label.setText(f"{frequency_mhz:.2f} [MHz]")
+        for index in range(self.power_duty_mode_combo.count()):
+            if self.power_duty_mode_combo.itemData(index) == self.power_duty_display_mode:
+                self.power_duty_mode_combo.setCurrentIndex(index)
+                return
 
     def delay_status_text(self) -> str:
         if not self.has_timing_config:
@@ -1344,6 +1644,13 @@ class TimingDiagram(QtWidgets.QMainWindow):
             copy_window.pl_clk1_delay_combo.setCurrentIndex(
                 self.pl_clk1_delay_combo.currentIndex()
             )
+            if copy_window.power_duty_mode_combo is not None:
+                copy_window.power_duty_mode_combo.setCurrentIndex(
+                    self.power_duty_mode_combo.currentIndex()
+                    if self.power_duty_mode_combo is not None
+                    else 0
+                )
+            copy_window.power_duty_display_mode = self.power_duty_display_mode
             copy_window.pl_clk1_delay_ns = self.pl_clk1_delay_ns
             copy_window.draw()
             copy_window.apply_plot_view_ranges(self.plot_view_ranges())
@@ -1368,6 +1675,7 @@ class TimingDiagram(QtWidgets.QMainWindow):
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
         QtCore.QTimer.singleShot(0, self.align_control_panel)
+        QtCore.QTimer.singleShot(0, self.update_margin_axis_ticks)
 
 
 def main() -> None:

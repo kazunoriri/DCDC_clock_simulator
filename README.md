@@ -49,14 +49,22 @@ uv run python main.py
 | power_net_delay_ns_5 | 50.0 |
 | power_net_delay_ns_6 |  |
 | power_net_delay_ns_7 |  |
-| power_net_duty_percent_0 | 35.0 |
-| power_net_duty_percent_1 | 42.5 |
-| power_net_duty_percent_2 | 50.0 |
-| power_net_duty_percent_3 | 57.5 |
-| power_net_duty_percent_4 | 65.0 |
-| power_net_duty_percent_5 | 72.5 |
-| power_net_duty_percent_6 |  |
-| power_net_duty_percent_7 |  |
+| power_net_duty_percent_0_min | 17.5 |
+| power_net_duty_percent_1_min | 21.25 |
+| power_net_duty_percent_2_min | 25.0 |
+| power_net_duty_percent_3_min | 28.75 |
+| power_net_duty_percent_4_min | 32.5 |
+| power_net_duty_percent_5_min | 36.25 |
+| power_net_duty_percent_6_min |  |
+| power_net_duty_percent_7_min |  |
+| power_net_duty_percent_0_max | 35.0 |
+| power_net_duty_percent_1_max | 42.5 |
+| power_net_duty_percent_2_max | 50.0 |
+| power_net_duty_percent_3_max | 57.5 |
+| power_net_duty_percent_4_max | 65.0 |
+| power_net_duty_percent_5_max | 72.5 |
+| power_net_duty_percent_6_max |  |
+| power_net_duty_percent_7_max |  |
 
 現在のタイミング条件:
 
@@ -66,9 +74,10 @@ uv run python main.py
 - PL_DCDC_CLK1 は 175 MHz を分周したクロックで、デューティ比は 50% です。
 - `pl_dcdc_clk_delay_ns` は PL_DCDC_CLK1 の初期遅延量を ns 単位で指定します。
 - `power_net_delay_ns_*` は PL_DCDC_CLK1 から各電源ネットまでの遅延量を ns 単位で指定します。
-- `power_net_duty_percent_*` は各電源ネット波形のデューティ比を指定します。
+- `power_net_duty_percent_*_min` / `power_net_duty_percent_*_max` は各電源ネット波形のデューティ比範囲を指定します。値は `0 < min <= max <= 100` です。
 - 電源ネット名が空欄、または遅延量 / デューティ比が未設定・不正な場合、その電源ネットはプロットされません。
 - PL_DCDC_CLK1 の遅延量は、サイドパネルから ns 単位で編集できます。
-- 各電源ネットについて、CDS1 / CDS2 の立ち下がりエッジに最も近い立ち上がり / 立ち下がりエッジまでの距離を ns 単位で表示します。
+- 各電源ネットについて、CDS1 / CDS2 の立ち下がりエッジに最も近い立ち上がり / 立ち下がりエッジまでの距離を ns 単位で表示します。SW↓ は duty 範囲を 0.1% 刻みでサンプリングし、中央のマージンプロットに取り得る縦範囲を表示します。
+- タイミング波形は duty min 側を表示します。
 - 最大 8 本の電源ネット信号を読み込めます。
 - 微調整遅延のメモ: 20 ns および 250 ns

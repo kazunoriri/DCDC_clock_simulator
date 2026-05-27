@@ -94,7 +94,8 @@ class NetConfig:
     name: str
     pl_delay_ns: float
     period_ns: float
-    duty_percent: float
+    duty_percent_min: float
+    duty_percent_max: float
     cds1_fall_us: float
     cds2_fall_us: float
 
@@ -154,7 +155,8 @@ def load_net_configs() -> dict[str, NetConfig]:
                 name=name,
                 pl_delay_ns=float(data["pl_dcdc_clk_delay_ns"]),
                 period_ns=period_ns,
-                duty_percent=float(data[f"power_net_duty_percent_{index}"]),
+                duty_percent_min=float(data[f"power_net_duty_percent_{index}_min"]),
+                duty_percent_max=float(data[f"power_net_duty_percent_{index}_max"]),
                 cds1_fall_us=float(data["cds1_fall_us"]),
                 cds2_fall_us=float(data["cds2_fall_us"]),
             )
@@ -177,7 +179,7 @@ def nearest_edge_delta_ns(target_us: float, first_edge_ns: float, period_ns: flo
 
 def predicted(config: NetConfig, power_delay_ns: float) -> dict[str, float]:
     rise_ns = config.pl_delay_ns + power_delay_ns
-    fall_ns = rise_ns + config.period_ns * config.duty_percent / 100.0
+    fall_ns = rise_ns + config.period_ns * config.duty_percent_min / 100.0
     return {
         "CDS1↓ to SW↑": nearest_edge_delta_ns(config.cds1_fall_us, rise_ns, config.period_ns),
         "CDS1↓ to SW↓": nearest_edge_delta_ns(config.cds1_fall_us, fall_ns, config.period_ns),
@@ -250,7 +252,8 @@ def build_result_rows(
             name=loaded_config.name,
             pl_delay_ns=loaded_config.pl_delay_ns,
             period_ns=loaded_config.period_ns,
-            duty_percent=loaded_config.duty_percent,
+            duty_percent_min=loaded_config.duty_percent_min,
+            duty_percent_max=loaded_config.duty_percent_max,
             cds1_fall_us=loaded_config.cds1_fall_us,
             cds2_fall_us=loaded_config.cds2_fall_us + cds2_fall_offset_ns / 1000.0,
         )
